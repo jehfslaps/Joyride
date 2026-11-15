@@ -8,6 +8,7 @@ import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native
 import MapView, { Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DEMO, demoReady } from '@/lib/demo';
 import { BigButton } from '@/components/BigButton';
 import { formatDuration, formatMiles, lineLength, type LngLat } from '@/lib/geo';
 import {
@@ -31,12 +32,14 @@ export default function Home() {
   const [now, setNow] = useState(Date.now());
 
   const refresh = useCallback(async () => {
+    await demoReady;
     setState(await getRecorderState());
     setDrives(await listDrives());
   }, []);
 
   // First launch: show the welcome screen once.
   useEffect(() => {
+    if (DEMO) return;
     AsyncStorage.getItem('joyride:welcomed:v1')
       .then((v) => {
         if (!v) router.replace('/welcome');

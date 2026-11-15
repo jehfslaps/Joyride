@@ -26,7 +26,7 @@ import { colors, radius, type } from '@/theme';
 const toLatLng = (c: LngLat) => ({ latitude: c[1], longitude: c[0] });
 
 export default function FunRoutesScreen() {
-  const params = useLocalSearchParams<{ lng?: string; lat?: string; name?: string; secret?: string }>();
+  const params = useLocalSearchParams<{ lng?: string; lat?: string; name?: string; secret?: string; pick?: string }>();
   const insets = useSafeAreaInsets();
   const map = useRef<MapView>(null);
   const secret = params.secret === '1';
@@ -97,6 +97,13 @@ export default function FunRoutesScreen() {
         if (id === buildId.current) setBuilding(false);
       });
   }, [dest, here]);
+
+  // Optional ?pick=<style> selects the first route of that style once they're in.
+  useEffect(() => {
+    if (building || selected || !params.pick) return;
+    const match = routes.find((r) => r.style === params.pick);
+    if (match) setSelected(match.id);
+  }, [building, routes, selected, params.pick]);
 
   const chosen = useMemo(() => routes.find((r) => r.id === selected) ?? null, [routes, selected]);
 

@@ -1,0 +1,134 @@
+name: Screenshots
+
+# Builds a demo version of the app (sample drives, no welcome screen), runs it
+# in the iPhone simulator, and saves screenshots of the main screens to a
+# private draft release called "screenshots".
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: screenshots
+  cancel-in-progress: true
+
+jobs:
+  shots:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      EXPO_NO_TELEMETRY: 1
+      CI: 1
+      BUNDLE_ID: com.joyridedrives.app7k2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick the newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JavaScript packages
+        run: npm ci
+
+      - name: Keys and demo mode
+        env:
+          MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+          MAPBOX_PUBLIC_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
+        run: |
+          printf 'EXPO_PUBLIC_MAPBOX_TOKEN=%s\nEXPO_PUBLIC_DEMO=1\n' "$MAPBOX_PUBLIC_TOKEN" > .env.local
+          printf 'machine api.mapbox.com\n  login mapbox\n  password %s\n' "$MAPBOX_DOWNLOADS_TOKEN" > ~/.netrc
+          chmod 600 ~/.netrc
+
+      - name: Generate the iOS project
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods
+        working-directory: ios
+        run: pod install
+
+      - name: Build for the simulator
+        working-directory: ios
+        run: |
+          set -o pipefail
+          WORKSPACE=$(ls -d *.xcworkspace | head -1)
+          SCHEME="${WORKSPACE%.xcworkspace}"
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build -skipPackagePluginValidation -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee xcodebuild.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" xcodebuild.log
+
+      - name: Start an iPhone simulator
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devs = [d for rt, ds in json.load(sys.stdin)["devices"].items() if "iOS" in rt for d in ds]
+          pick = next((d for d in devs if d["name"] == "iPhone 17 Pro"), None) or next(d for d in devs if d["name"].startswith("iPhone"))
+          print(pick["udid"])')
+          echo "DEVICE=$DEVICE" >> "$GITHUB_ENV"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl ui "$DEVICE" appearance dark
+          xcrun simctl status_bar "$DEVICE" override --time "9:41" --batteryState charged --batteryLevel 100 --cellularMode active --cellularBars 4 --wifiBars 3
+          xcrun simctl location "$DEVICE" set 33.9792,-118.0328
+
+      - name: Install and take screenshots
+        run: |
+          set -x
+          APP=$(ls -d ios/build/Build/Products/Release-iphonesimulator/*.app | head -1)
+          xcrun simctl install "$DEVICE" "$APP"
+          xcrun simctl privacy "$DEVICE" grant location-always "$BUNDLE_ID" || xcrun simctl privacy "$DEVICE" grant location "$BUNDLE_ID"
+          mkdir -p shots
+          shot() { sleep "$2"; xcrun simctl io "$DEVICE" screenshot "shots/$1.png"; }
+          open_url() { xcrun simctl openurl "$DEVICE" "$1"; }
+
+          xcrun simctl launch "$DEVICE" "$BUNDLE_ID"
+          shot 1-home 40
+
+          open_url "joyride://drive/1794114300000"
+          shot 2-saved-drive 10
+
+          open_url "joyride://routes?lng=-117.7831&lat=33.5427&name=Laguna%20Beach&pick=scenic"
+          shot 3-fun-routes 60
+
+          open_url "joyride://surprise"
+          shot 4-surprise-me 8
+
+          open_url "joyride://settings"
+          shot 5-settings 5
+
+          open_url "joyride://welcome"
+          shot 6-welcome 5
+
+          open_url "joyride://drive/1794717720000?go=1"
+          shot 7-relive-navigation 60
+          shot 8-relive-navigation-later 30
+          ls -la shots
+
+      - name: Save screenshots to a draft release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls shots/*.png >/dev/null 2>&1 || exit 0
+          gh release delete screenshots --yes --cleanup-tag 2>/dev/null || true
+          gh release create screenshots shots/*.png --draft --target "$GITHUB_SHA" \
+            --title "App screenshots" --notes "Simulator screenshots of the demo build. Draft: only the owner can see it."
+
+      - name: Show build errors
+        if: failure()
+        working-directory: ios
+        run: grep -n -B2 -A6 "error:" xcodebuild.log | head -200 || true
+
+      - name: Clean up keys
+        if: always()
+        run: rm -f ~/.netrc .env.local

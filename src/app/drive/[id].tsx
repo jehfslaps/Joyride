@@ -7,6 +7,7 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BigButton } from '@/components/BigButton';
 import { JoyrideNav } from '../../../modules/joyride-nav';
+import { DEMO } from '@/lib/demo';
 import { distance, formatDuration, formatMiles, type LngLat } from '@/lib/geo';
 import { Guidance } from '@/lib/guidance';
 import { buildRouteFromDrive, hasMapbox, MapboxError } from '@/lib/mapbox';
@@ -28,7 +29,7 @@ import { colors, radius, type } from '@/theme';
 type Choice = { startAwayM: number; nearestAwayM: number; nearestPct: number };
 
 export default function DriveScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, go: autoGo } = useLocalSearchParams<{ id: string; go?: string }>();
   const insets = useSafeAreaInsets();
   const map = useRef<MapView>(null);
   const [drive, setDrive] = useState<DriveSummary | null>(null);
@@ -42,6 +43,14 @@ export default function DriveScreen() {
       setPoints(await getDrivePoints(id));
     })();
   }, [id]);
+
+  // Demo builds only: start reliving straight away (for screenshots).
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!DEMO || autoGo !== '1' || autoStarted.current || points.length < 2) return;
+    autoStarted.current = true;
+    onRelive();
+  }, [autoGo, points.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const coords = useMemo(() => points.map((p) => ({ latitude: p[1], longitude: p[0] })), [points]);
 
