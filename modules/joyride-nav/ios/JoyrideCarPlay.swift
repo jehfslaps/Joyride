@@ -96,6 +96,51 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
 
   nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, didSetup navigationMapView: NavigationMapView) {}
 
+  nonisolated func carPlayManager(
+    _ carPlayManager: CarPlayManager,
+    leadingNavigationBarButtonsCompatibleWith traitCollection: UITraitCollection,
+    in carPlayTemplate: CPMapTemplate,
+    for activity: CarPlayActivity,
+    cameraState: NavigationCameraState
+  ) -> [CPBarButton]? {
+    nil
+  }
+
+  nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, selectedPreviewFor trip: CPTrip, using routeChoice: CPRouteChoice) {}
+
+  nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, guidanceBackgroundColorFor style: UIUserInterfaceStyle) -> UIColor? {
+    // Joyride's dark night-drive look.
+    UIColor(red: 0.075, green: 0.149, blue: 0.11, alpha: 1)
+  }
+
+  nonisolated func carPlayManagerWillCancelPreview(
+    _ carPlayManager: CarPlayManager,
+    configuration: inout CarPlayManagerCancelPreviewConfiguration
+  ) {
+    configuration.popToRoot = true
+  }
+
+  nonisolated func carPlayManagerDidCancelPreview(_ carPlayManager: CarPlayManager) {}
+
+  nonisolated func carPlayManagerDidBeginNavigation(_ carPlayManager: CarPlayManager) {}
+
+  nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, didPresent navigationViewController: CarPlayNavigationViewController) {}
+
+  nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, shouldPresentArrivalUIFor waypoint: Waypoint) -> Bool {
+    true
+  }
+
+  nonisolated func carPlayManager(
+    _ carPlayManager: CarPlayManager,
+    didFailToFetchRouteBetween waypoints: [Waypoint]?,
+    options: RouteOptions,
+    error: Error
+  ) -> CPNavigationAlert? {
+    nil
+  }
+
+  nonisolated func carPlayManagerWillEndNavigation(_ carPlayManager: CarPlayManager, byCanceling canceled: Bool) {}
+
   nonisolated func carPlayManagerDidEndNavigation(_ carPlayManager: CarPlayManager, byCanceling canceled: Bool) {
     MainActor.assumeIsolated { JoyrideNavigator.shared.endFromCarPlay(canceled: canceled) }
   }
