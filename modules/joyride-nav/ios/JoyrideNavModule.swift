@@ -203,8 +203,8 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     MainActor.assumeIsolated {
       session?.stop()
       session = nil
+      navigationViewController.dismiss(animated: true)
     }
-    navigationViewController.dismiss(animated: true)
     onEnded?(canceled, arrived)
     onEnded = nil
   }
