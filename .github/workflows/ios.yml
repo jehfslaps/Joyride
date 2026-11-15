@@ -52,6 +52,17 @@ jobs:
             echo "Mapbox public token: not set (fine for a compile check)"
           fi
 
+      - name: Mapbox download access
+        env:
+          MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+        run: |
+          if [ -z "$MAPBOX_DOWNLOADS_TOKEN" ]; then
+            echo "::error::The MAPBOX_DOWNLOADS_TOKEN secret is missing. The Mapbox Navigation SDK can't be downloaded without it."
+            exit 1
+          fi
+          printf 'machine api.mapbox.com\n  login mapbox\n  password %s\n' "$MAPBOX_DOWNLOADS_TOKEN" > ~/.netrc
+          chmod 600 ~/.netrc
+
       - name: Generate the iOS project
         run: npx expo prebuild --platform ios --no-install
 
@@ -72,6 +83,8 @@ jobs:
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee xcodebuild.log | grep -E "error:|warning: .*Joyride|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" xcodebuild.log

@@ -6,7 +6,8 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BigButton } from '@/components/BigButton';
-import { distance, formatDuration, formatMiles, type LngLat } from '@/lib/geo';
+import { JoyrideNav } from '../../../modules/joyride-nav';
+import { distance, formatDuration, formatMiles, thin, type LngLat } from '@/lib/geo';
 import { Guidance } from '@/lib/guidance';
 import { buildRouteFromDrive, hasMapbox, MapboxError } from '@/lib/mapbox';
 import type { NavRoute } from '@/lib/route';
@@ -91,6 +92,23 @@ export default function DriveScreen() {
       );
     } finally {
       setPreparing(null);
+    }
+  }
+
+  // Phase 1 test: guide along the first part of the drive with the Mapbox engine.
+  // The engine takes up to 100 points per request, so long drives are trimmed for now.
+  async function onBetaRelive() {
+    if (!JoyrideNav) return;
+    const coords = points.map((p) => [p[0], p[1]] as LngLat);
+    const keep = thin(coords, 35).slice(0, 100).map((i) => coords[i]);
+    if (keep.length < 2) {
+      Alert.alert('Drive too short', 'This drive doesn’t have enough points to navigate.');
+      return;
+    }
+    try {
+      await JoyrideNav.startMatchedNavigation(keep, false);
+    } catch (e: any) {
+      Alert.alert('Couldn’t start navigation', e?.message ?? String(e));
     }
   }
 
@@ -199,6 +217,12 @@ export default function DriveScreen() {
             onPress={onRelive}
             busy={preparing != null}
           />
+        )}
+
+        {JoyrideNav?.isAvailable && !choice && (
+          <Pressable onPress={onBetaRelive} style={{ alignSelf: 'center', padding: 8 }} accessibilityRole="button">
+            <Text style={[type.small, { color: colors.amber }]}>Try the new navigation engine (beta)</Text>
+          </Pressable>
         )}
 
         {!hasMapbox() && (
