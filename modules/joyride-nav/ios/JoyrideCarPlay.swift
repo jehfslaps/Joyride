@@ -94,6 +94,8 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     return [drives, surprise]
   }
 
+  nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, didSetup navigationMapView: NavigationMapView) {}
+
   nonisolated func carPlayManagerDidEndNavigation(_ carPlayManager: CarPlayManager, byCanceling canceled: Bool) {
     MainActor.assumeIsolated { JoyrideNavigator.shared.endFromCarPlay(canceled: canceled) }
   }
