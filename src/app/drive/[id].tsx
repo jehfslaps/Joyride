@@ -66,6 +66,7 @@ export default function DriveScreen() {
   }
 
   async function onRelive() {
+    if (JoyrideNav?.isAvailable) return onNativeRelive();
     try {
       setPreparing(0);
       const route = await getRoute();
@@ -95,8 +96,8 @@ export default function DriveScreen() {
     }
   }
 
-  // Beta: relive the whole drive with the Mapbox navigation engine.
-  async function onBetaRelive() {
+  // Relive the whole drive with the Mapbox navigation engine.
+  async function onNativeRelive() {
     if (!JoyrideNav) return;
     try {
       const perm = await Location.requestForegroundPermissionsAsync();
@@ -115,9 +116,12 @@ export default function DriveScreen() {
           { text: 'Nearest point', onPress: () => resolve(true) },
         ]);
       });
+      setPreparing(0);
       await JoyrideNav.startReplay(trace, here, joinNearest, false);
     } catch (e: any) {
       Alert.alert('Couldn’t start navigation', e?.message ?? String(e));
+    } finally {
+      setPreparing(null);
     }
   }
 
@@ -226,12 +230,6 @@ export default function DriveScreen() {
             onPress={onRelive}
             busy={preparing != null}
           />
-        )}
-
-        {JoyrideNav?.isAvailable && !choice && (
-          <Pressable onPress={onBetaRelive} style={{ alignSelf: 'center', padding: 8 }} accessibilityRole="button">
-            <Text style={[type.small, { color: colors.amber }]}>Try the new navigation engine (beta)</Text>
-          </Pressable>
         )}
 
         {!hasMapbox() && (
