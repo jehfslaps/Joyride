@@ -5,7 +5,13 @@ type NavigationEnded = { canceled: boolean; arrived: boolean };
 type JoyrideNavNative = {
   isAvailable: boolean;
   sdkVersion: string;
-  startMatchedNavigation(coordinates: [number, number][], simulate: boolean): Promise<void>;
+  /** Relives a recorded drive: trace and here are [longitude, latitude]. */
+  startReplay(
+    trace: [number, number][],
+    here: [number, number],
+    joinNearest: boolean,
+    simulate: boolean,
+  ): Promise<void>;
   addListener(event: 'onNavigationEnded', listener: (e: NavigationEnded) => void): EventSubscription;
 };
 

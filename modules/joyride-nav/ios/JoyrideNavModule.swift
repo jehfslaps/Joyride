@@ -7,10 +7,9 @@ import UIKit
 
 /// Joyride's bridge to the Mapbox Navigation SDK.
 ///
-/// Phase 1: proves the SDK is linked and can guide along a road-matched trace.
-/// `startMatchedNavigation` takes up to 100 recorded points, asks Mapbox's Map
-/// Matching service which roads they were on, and presents full-screen
-/// turn-by-turn guidance along exactly those roads.
+/// `startReplay` takes a whole recorded drive and guides the driver along the
+/// exact same roads, full screen, with voice turn-by-turn directions. If the
+/// driver isn't on the drive yet, it first gets them to it.
 public final class JoyrideNavModule: Module {
   public func definition() -> ModuleDefinition {
     Name("JoyrideNav")
@@ -23,22 +22,28 @@ public final class JoyrideNavModule: Module {
     /// The Mapbox Navigation SDK version this build was made with.
     Constant("sdkVersion") { "3.27.3" }
 
-    /// Guides the driver along a road-matched version of `coordinates`
-    /// ([longitude, latitude] pairs, 2 to 100 of them).
+    /// Relives a recorded drive.
+    /// - trace: the recorded points, [longitude, latitude] pairs, in driving order
+    /// - here: the driver's current [longitude, latitude]
+    /// - joinNearest: join at the nearest point of the drive instead of its start
+    /// - simulate: drive the route automatically (for testing)
     /// Resolves once guidance is on screen; `onNavigationEnded` fires when it closes.
-    AsyncFunction("startMatchedNavigation") { (coordinates: [[Double]], simulate: Bool, promise: Promise) in
-      let points = coordinates.compactMap { pair -> CLLocationCoordinate2D? in
-        guard pair.count >= 2 else { return nil }
-        return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
+    AsyncFunction("startReplay") { (trace: [[Double]], here: [Double], joinNearest: Bool, simulate: Bool, promise: Promise) in
+      let points = trace.compactMap(Self.coordinate)
+      guard points.count >= 2 else {
+        promise.reject("E_POINTS", "This drive doesn't have enough points to navigate.")
+        return
       }
-      guard points.count >= 2, points.count <= 100 else {
-        promise.reject("E_POINTS", "Need between 2 and 100 points, got \(points.count).")
+      guard let start = Self.coordinate(here) else {
+        promise.reject("E_LOCATION", "Joyride doesn't know where you are yet.")
         return
       }
       Task { @MainActor in
         do {
-          try await JoyrideNavigator.shared.startMatched(
-            points: points,
+          try await JoyrideNavigator.shared.startReplay(
+            trace: points,
+            from: start,
+            joinNearest: joinNearest,
             simulate: simulate,
             presenter: self.appContext?.utilities?.currentViewController()
           ) { [weak self] canceled, arrived in
@@ -51,6 +56,12 @@ public final class JoyrideNavModule: Module {
       }
     }
   }
+
+  private static func coordinate(_ pair: [Double]) -> CLLocationCoordinate2D? {
+    guard pair.count >= 2 else { return nil }
+    let c = CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
+    return CLLocationCoordinate2DIsValid(c) ? c : nil
+  }
 }
 
 /// Owns the single Mapbox navigation instance the SDK allows per app.
@@ -60,6 +71,7 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
 
   private var provider: MapboxNavigationProvider?
   private var providerIsSimulated = false
+  private var session: ReplaySession?
   private var onEnded: ((Bool, Bool) -> Void)?
   private var arrived = false
 
@@ -67,8 +79,8 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
   private func navigationProvider(simulate: Bool) -> MapboxNavigationProvider {
     let config = CoreConfig(
       routingConfig: RoutingConfig(
-        // A matched route is the exact recorded drive. Joyride decides how to
-        // get you back onto it, so the SDK must never swap in a new route.
+        // A replay follows the exact recorded drive. Joyride decides how to get
+        // you back onto it, so the SDK must never swap in its own route.
         rerouteConfig: RerouteConfig(detectsReroute: false)
       ),
       locationSource: simulate ? .simulation(initialLocation: nil) : .live
@@ -87,8 +99,10 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
   }
 
   @MainActor
-  func startMatched(
-    points: [CLLocationCoordinate2D],
+  func startReplay(
+    trace: [CLLocationCoordinate2D],
+    from here: CLLocationCoordinate2D,
+    joinNearest: Bool,
     simulate: Bool,
     presenter: UIViewController?,
     onEnded: @escaping (Bool, Bool) -> Void
@@ -97,15 +111,10 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     let provider = navigationProvider(simulate: simulate)
     let navigation = provider.mapboxNavigation
 
-    // Only the first and last points are stops; everything in between just
-    // shapes the route.
-    var waypoints = points.map { Waypoint(coordinate: $0) }
-    for index in waypoints.indices {
-      waypoints[index].separatesLegs = index == 0 || index == waypoints.count - 1
-    }
-    let options = NavigationMatchOptions(waypoints: waypoints)
-
-    let routes = try await navigation.routingProvider().calculateRoutes(options: options).value
+    session?.stop()
+    let replay = ReplaySession(navigation: navigation, trace: trace)
+    guard !replay.isEmpty else { throw JoyrideNavError.tooShort }
+    let routes = try await replay.firstRoutes(from: here, joinNearest: joinNearest)
 
     let navigationOptions = NavigationOptions(
       mapboxNavigation: navigation,
@@ -117,9 +126,12 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     controller.routeLineTracksTraversal = true
     controller.delegate = self
 
+    session = replay
     self.onEnded = onEnded
-    self.arrived = false
-    presenter.present(controller, animated: true)
+    arrived = false
+    presenter.present(controller, animated: true) {
+      MainActor.assumeIsolated { replay.attach() }
+    }
   }
 
   // MARK: NavigationViewControllerDelegate
@@ -128,13 +140,21 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     _ navigationViewController: NavigationViewController,
     didArriveAt waypoint: Waypoint
   ) {
-    arrived = true
+    // Only the end of the whole drive counts; the end of a piece or of a
+    // detour is just a handover.
+    MainActor.assumeIsolated {
+      if session?.phase == .finished { arrived = true }
+    }
   }
 
   func navigationViewControllerDidDismiss(
     _ navigationViewController: NavigationViewController,
     byCanceling canceled: Bool
   ) {
+    MainActor.assumeIsolated {
+      session?.stop()
+      session = nil
+    }
     navigationViewController.dismiss(animated: true)
     onEnded?(canceled, arrived)
     onEnded = nil
@@ -143,10 +163,12 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
 
 enum JoyrideNavError: LocalizedError {
   case noScreen
+  case tooShort
 
   var errorDescription: String? {
     switch self {
     case .noScreen: return "There is no screen to show navigation on."
+    case .tooShort: return "This drive is too short to navigate."
     }
   }
 }

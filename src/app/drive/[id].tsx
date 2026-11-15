@@ -7,7 +7,7 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BigButton } from '@/components/BigButton';
 import { JoyrideNav } from '../../../modules/joyride-nav';
-import { distance, formatDuration, formatMiles, thin, type LngLat } from '@/lib/geo';
+import { distance, formatDuration, formatMiles, type LngLat } from '@/lib/geo';
 import { Guidance } from '@/lib/guidance';
 import { buildRouteFromDrive, hasMapbox, MapboxError } from '@/lib/mapbox';
 import type { NavRoute } from '@/lib/route';
@@ -95,18 +95,27 @@ export default function DriveScreen() {
     }
   }
 
-  // Phase 1 test: guide along the first part of the drive with the Mapbox engine.
-  // The engine takes up to 100 points per request, so long drives are trimmed for now.
+  // Beta: relive the whole drive with the Mapbox navigation engine.
   async function onBetaRelive() {
     if (!JoyrideNav) return;
-    const coords = points.map((p) => [p[0], p[1]] as LngLat);
-    const keep = thin(coords, 35).slice(0, 100).map((i) => coords[i]);
-    if (keep.length < 2) {
-      Alert.alert('Drive too short', 'This drive doesn’t have enough points to navigate.');
-      return;
-    }
     try {
-      await JoyrideNav.startMatchedNavigation(keep, false);
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert('Location needed', 'Joyride needs your location to guide you.');
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const here: [number, number] = [pos.coords.longitude, pos.coords.latitude];
+      const trace = points.map((p) => [p[0], p[1]] as [number, number]);
+      const startAway = distance(here, trace[0]);
+      const joinNearest = await new Promise<boolean>((resolve) => {
+        if (startAway < 150) return resolve(false);
+        Alert.alert('Where do you want to pick it up?', undefined, [
+          { text: 'From the beginning', onPress: () => resolve(false) },
+          { text: 'Nearest point', onPress: () => resolve(true) },
+        ]);
+      });
+      await JoyrideNav.startReplay(trace, here, joinNearest, false);
     } catch (e: any) {
       Alert.alert('Couldn’t start navigation', e?.message ?? String(e));
     }
