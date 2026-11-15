@@ -9,6 +9,9 @@ module.exports = ({ config }) => {
     ...config,
     ios: {
       ...ios,
+      // Set by the TestFlight build: signing team and an ever-increasing build number.
+      ...(process.env.APPLE_TEAM_ID ? { appleTeamId: process.env.APPLE_TEAM_ID } : {}),
+      ...(process.env.BUILD_NUMBER ? { buildNumber: String(process.env.BUILD_NUMBER) } : {}),
       infoPlist: {
         ...infoPlist,
         // Read by the Mapbox Navigation SDK.

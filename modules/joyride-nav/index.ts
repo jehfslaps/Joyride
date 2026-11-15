@@ -12,6 +12,8 @@ type JoyrideNavNative = {
     joinNearest: boolean,
     simulate: boolean,
   ): Promise<void>;
+  /** Keeps CarPlay's copy of the saved drives up to date. */
+  syncDrives(drives: { id: string; title: string; subtitle: string; trace: [number, number][] }[]): Promise<void>;
   addListener(event: 'onNavigationEnded', listener: (e: NavigationEnded) => void): EventSubscription;
 };
 

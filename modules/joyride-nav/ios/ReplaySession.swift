@@ -27,6 +27,18 @@ enum Geo {
     return (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
   }
 
+  /// The point `meters` away from `from` in direction `bearing` (degrees).
+  static func destination(from: CLLocationCoordinate2D, bearing: Double, meters: Double) -> CLLocationCoordinate2D {
+    let δ = meters / earthRadius
+    let θ = bearing * .pi / 180
+    let φ1 = from.latitude * .pi / 180
+    let λ1 = from.longitude * .pi / 180
+    let φ2 = asin(sin(φ1) * cos(δ) + cos(φ1) * sin(δ) * cos(θ))
+    let λ2 = λ1 + atan2(sin(θ) * sin(δ) * cos(φ1), cos(δ) - sin(φ1) * sin(φ2))
+    let lng = (λ2 * 180 / .pi + 540).truncatingRemainder(dividingBy: 360) - 180
+    return CLLocationCoordinate2D(latitude: φ2 * 180 / .pi, longitude: lng)
+  }
+
   /// Signed change in heading, -180...180.
   static func turnAngle(_ b1: Double, _ b2: Double) -> Double {
     var d = b2 - b1

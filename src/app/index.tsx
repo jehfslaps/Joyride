@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import MapView, { Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BigButton } from '@/components/BigButton';
 import { formatDuration, formatMiles, lineLength, type LngLat } from '@/lib/geo';
 import {
@@ -32,6 +33,15 @@ export default function Home() {
   const refresh = useCallback(async () => {
     setState(await getRecorderState());
     setDrives(await listDrives());
+  }, []);
+
+  // First launch: show the welcome screen once.
+  useEffect(() => {
+    AsyncStorage.getItem('joyride:welcomed:v1')
+      .then((v) => {
+        if (!v) router.replace('/welcome');
+      })
+      .catch(() => {});
   }, []);
 
   useFocusEffect(
@@ -161,13 +171,17 @@ export default function Home() {
             <Polyline coordinates={coords} strokeColor={colors.amber} strokeWidth={6} lineCap="round" lineJoin="round" />
           )}
         </MapView>
-        <View style={[styles.mapTop, { paddingTop: insets.top + 8 }]} pointerEvents="none">
-          <Text style={styles.brand}>Joyride</Text>
-          {recording && (
-            <View style={styles.recPill}>
+        <View style={[styles.mapTop, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+          <Text style={styles.brand} pointerEvents="none">Joyride</Text>
+          {recording ? (
+            <View style={styles.recPill} pointerEvents="none">
               <View style={styles.recDot} />
               <Text style={styles.recPillText}>RECORDING</Text>
             </View>
+          ) : (
+            <Pressable onPress={() => router.push('/settings')} hitSlop={10} style={styles.gear} accessibilityLabel="Settings">
+              <MaterialCommunityIcons name="cog-outline" size={22} color={colors.text} />
+            </Pressable>
           )}
         </View>
         <View style={styles.mapFade} pointerEvents="none" />
@@ -205,6 +219,10 @@ export default function Home() {
                 </View>
               )}
               <BigButton label="Start a drive" icon="record-circle" onPress={onStart} busy={busy} />
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <BigButton label="Fun routes" icon="routes" tone="ghost" onPress={() => router.push('/routes')} style={{ flex: 1 }} />
+                <BigButton label="Surprise me" icon="dice-5" tone="ghost" onPress={() => router.push('/surprise')} style={{ flex: 1 }} />
+              </View>
               <Text style={[type.label, { marginTop: 8 }]}>YOUR DRIVES</Text>
             </View>
           }
@@ -262,6 +280,7 @@ function clock(ms: number) {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   mapWrap: { width: '100%', overflow: 'hidden' },
+  gear: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(11,14,19,0.82)', alignItems: 'center', justifyContent: 'center' },
   mapTop: { position: 'absolute', left: 20, right: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   brand: { ...type.hero, textShadowColor: 'rgba(0,0,0,0.6)', textShadowRadius: 12 },
   recPill: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.redDim, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: colors.red },

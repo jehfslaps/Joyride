@@ -22,6 +22,14 @@ public final class JoyrideNavModule: Module {
     /// The Mapbox Navigation SDK version this build was made with.
     Constant("sdkVersion") { "3.27.3" }
 
+    /// Keeps a copy of the saved drives for CarPlay, which can run without the
+    /// phone app's JavaScript.
+    AsyncFunction("syncDrives") { (drives: [DriveRecord]) in
+      DriveStore.save(drives.map {
+        StoredDrive(id: $0.id, title: $0.title, subtitle: $0.subtitle, trace: $0.trace)
+      })
+    }
+
     /// Relives a recorded drive.
     /// - trace: the recorded points, [longitude, latitude] pairs, in driving order
     /// - here: the driver's current [longitude, latitude]
@@ -64,6 +72,13 @@ public final class JoyrideNavModule: Module {
   }
 }
 
+struct DriveRecord: Record {
+  @Field var id: String = ""
+  @Field var title: String = ""
+  @Field var subtitle: String = ""
+  @Field var trace: [[Double]] = []
+}
+
 /// Owns the single Mapbox navigation instance the SDK allows per app.
 /// Everything here runs on the main thread.
 final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
@@ -98,6 +113,37 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     return created
   }
 
+  /// The live (not simulated) navigation provider, shared with CarPlay.
+  @MainActor
+  func sharedProvider() -> MapboxNavigationProvider {
+    provider ?? navigationProvider(simulate: false)
+  }
+
+  var hasActiveSession: Bool { session != nil }
+
+  /// Starts a replay chosen on the car screen. CarPlay shows its own guidance.
+  @MainActor
+  func startCarPlayReplay(
+    trace: [CLLocationCoordinate2D],
+    from here: CLLocationCoordinate2D,
+    joinNearest: Bool
+  ) async throws {
+    let navigation = sharedProvider().mapboxNavigation
+    session?.stop()
+    let replay = ReplaySession(navigation: navigation, trace: trace)
+    guard !replay.isEmpty else { throw JoyrideNavError.tooShort }
+    let routes = try await replay.firstRoutes(from: here, joinNearest: joinNearest)
+    session = replay
+    navigation.tripSession().startActiveGuidance(with: routes, startLegIndex: 0)
+    replay.attach()
+  }
+
+  @MainActor
+  func endFromCarPlay(canceled: Bool) {
+    session?.stop()
+    session = nil
+  }
+
   @MainActor
   func startReplay(
     trace: [CLLocationCoordinate2D],
@@ -130,7 +176,10 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     self.onEnded = onEnded
     arrived = false
     presenter.present(controller, animated: true) {
-      MainActor.assumeIsolated { replay.attach() }
+      MainActor.assumeIsolated {
+        replay.attach()
+        JoyrideCarPlay.shared.mirrorNavigation(from: here)
+      }
     }
   }
 

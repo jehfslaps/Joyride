@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { lineLength, type LngLat } from './geo';
+import { JoyrideNav } from '../../modules/joyride-nav';
+import { lineLength, thin, type LngLat } from './geo';
 import type { NavRoute } from './route';
 
 /** One GPS fix: [longitude, latitude, unix time in ms]. */
@@ -65,6 +66,7 @@ export async function saveDrive(points: TrackPoint[]): Promise<DriveSummary | nu
   const list = (await readIndex()).filter((d) => d.id !== summary.id);
   list.push(summary);
   await writeIndex(list);
+  syncDrivesToCarPlay().catch(() => {});
   return summary;
 }
 
@@ -74,12 +76,14 @@ export async function renameDrive(id: string, name: string) {
   if (!d) return;
   d.name = name.trim() || null;
   await writeIndex(list);
+  syncDrivesToCarPlay().catch(() => {});
 }
 
 export async function deleteDrive(id: string) {
   const list = (await readIndex()).filter((d) => d.id !== id);
   await writeIndex(list);
   await AsyncStorage.multiRemove([pointsKey(id), routeKey(id)]);
+  syncDrivesToCarPlay().catch(() => {});
 }
 
 /** The road-snapped, turn-by-turn version of a drive is worked out once and kept. */
@@ -107,4 +111,20 @@ export function driveSubtitle(d: DriveSummary): string {
   const day = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + year;
   const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   return `${day} · ${time}`;
+}
+
+/**
+ * CarPlay can run while this JavaScript isn't, so the native side keeps its
+ * own copy of the drives. Points are thinned to about every 20 m to keep it small.
+ */
+export async function syncDrivesToCarPlay() {
+  if (!JoyrideNav?.syncDrives) return;
+  const list = await listDrives();
+  const drives = [];
+  for (const d of list) {
+    const pts = (await getDrivePoints(d.id)).map((p) => [p[0], p[1]] as LngLat);
+    const trace = thin(pts, 20).map((i) => pts[i]);
+    drives.push({ id: d.id, title: driveTitle(d), subtitle: `${driveSubtitle(d)}`, trace });
+  }
+  await JoyrideNav.syncDrives(drives);
 }

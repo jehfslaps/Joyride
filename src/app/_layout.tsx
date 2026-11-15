@@ -2,10 +2,16 @@
 import '@/lib/recorder';
 
 import { Stack } from 'expo-router';
+import { useEffect } from 'react';
+import { syncDrivesToCarPlay } from '@/lib/storage';
 import { StatusBar } from 'expo-status-bar';
 import { colors } from '@/theme';
 
 export default function RootLayout() {
+  useEffect(() => {
+    syncDrivesToCarPlay().catch(() => {});
+  }, []);
+
   return (
     <>
       <StatusBar style="light" />
@@ -18,6 +24,10 @@ export default function RootLayout() {
       >
         <Stack.Screen name="index" />
         <Stack.Screen name="drive/[id]" />
+        <Stack.Screen name="routes" />
+        <Stack.Screen name="surprise" />
+        <Stack.Screen name="settings" />
+        <Stack.Screen name="welcome" options={{ animation: 'fade' }} />
         <Stack.Screen name="navigate/[id]" options={{ gestureEnabled: false, animation: 'fade' }} />
       </Stack>
     </>

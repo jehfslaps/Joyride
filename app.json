@@ -11,7 +11,9 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.joyridedrives.app7k2",
       "infoPlist": {
-        "UIBackgroundModes": ["location"],
+        "UIBackgroundModes": [
+          "location"
+        ],
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -36,7 +38,8 @@
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
         }
-      ]
+      ],
+      "./plugins/withCarPlay"
     ],
     "experiments": {
       "typedRoutes": false
