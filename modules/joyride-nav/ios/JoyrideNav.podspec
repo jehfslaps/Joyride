@@ -5,7 +5,7 @@
 # with the Downloads:Read scope in ~/.netrc (the GitHub build writes it from
 # the MAPBOX_DOWNLOADS_TOKEN secret).
 
-MAPBOX_NAV_VERSION = '3.27.3'
+mapbox_nav_version = '3.27.3'
 
 Pod::Spec.new do |s|
   s.name           = 'JoyrideNav'
@@ -30,7 +30,7 @@ Pod::Spec.new do |s|
 
   spm_dependency(s,
     url: 'https://github.com/mapbox/mapbox-navigation-ios.git',
-    requirement: { kind: 'exactVersion', version: MAPBOX_NAV_VERSION },
+    requirement: { kind: 'exactVersion', version: mapbox_nav_version },
     products: ['MapboxNavigationUIKit', 'MapboxNavigationCore']
   )
 end
