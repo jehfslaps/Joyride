@@ -4,7 +4,7 @@ import * as Linking from 'expo-linking';
 import * as Location from 'expo-location';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Pressable, Settings, StyleSheet, Text, View } from 'react-native';
 import MapView, { Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -39,7 +39,15 @@ export default function Home() {
 
   // First launch: show the welcome screen once.
   useEffect(() => {
-    if (DEMO) return;
+    if (DEMO) {
+      // Screenshot runs pick the screen to open through the app's settings
+      // (`defaults write <bundle id> demoRoute /routes?...`).
+      const route = Settings.get('demoRoute');
+      if (typeof route === 'string' && route.startsWith('/')) {
+        demoReady.then(() => router.push(route as any));
+      }
+      return;
+    }
     AsyncStorage.getItem('joyride:welcomed:v1')
       .then((v) => {
         if (!v) router.replace('/welcome');

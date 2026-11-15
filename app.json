@@ -39,7 +39,8 @@
           "isAndroidForegroundServiceEnabled": true
         }
       ],
-      "./plugins/withCarPlay"
+      "./plugins/withCarPlay",
+      "./plugins/withMapboxEmbed"
     ],
     "experiments": {
       "typedRoutes": false

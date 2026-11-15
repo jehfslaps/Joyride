@@ -85,33 +85,43 @@ jobs:
         run: |
           set -x
           APP=$(ls -d ios/build/Build/Products/Release-iphonesimulator/*.app | head -1)
+          ls "$APP/Frameworks" | tee shots-frameworks.txt || true
           xcrun simctl install "$DEVICE" "$APP"
           xcrun simctl privacy "$DEVICE" grant location-always "$BUNDLE_ID" || xcrun simctl privacy "$DEVICE" grant location "$BUNDLE_ID"
           mkdir -p shots
-          shot() { sleep "$2"; xcrun simctl io "$DEVICE" screenshot "shots/$1.png"; }
-          open_url() { xcrun simctl openurl "$DEVICE" "$1"; }
+          mv shots-frameworks.txt shots/app-frameworks.txt 2>/dev/null || true
+          START=$(date "+%Y-%m-%d %H:%M:%S")
 
-          xcrun simctl launch "$DEVICE" "$BUNDLE_ID"
-          shot 1-home 40
+          # Each screen: quit the app, tell it which screen to open, start it, wait, capture.
+          screen() {
+            name="$1"; route="$2"; wait="$3"
+            xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" 2>/dev/null || true
+            if [ -n "$route" ]; then
+              xcrun simctl spawn "$DEVICE" defaults write "$BUNDLE_ID" demoRoute "$route"
+            else
+              xcrun simctl spawn "$DEVICE" defaults delete "$BUNDLE_ID" demoRoute 2>/dev/null || true
+            fi
+            xcrun simctl launch "$DEVICE" "$BUNDLE_ID" || true
+            sleep "$wait"
+            xcrun simctl io "$DEVICE" screenshot "shots/$name.png"
+          }
 
-          open_url "joyride://drive/1794114300000"
-          shot 2-saved-drive 10
+          screen 1-home "" 45
+          screen 2-saved-drive "/drive/1794114300000" 12
+          screen 3-fun-routes "/routes?lng=-117.7831&lat=33.5427&name=Laguna%20Beach&pick=scenic" 60
+          screen 4-surprise-me "/surprise" 10
+          screen 5-settings "/settings" 8
+          screen 6-welcome "/welcome" 8
+          screen 7-relive-navigation "/drive/1794717720000?go=1" 60
+          sleep 30
+          xcrun simctl io "$DEVICE" screenshot shots/8-relive-navigation-later.png
 
-          open_url "joyride://routes?lng=-117.7831&lat=33.5427&name=Laguna%20Beach&pick=scenic"
-          shot 3-fun-routes 60
-
-          open_url "joyride://surprise"
-          shot 4-surprise-me 8
-
-          open_url "joyride://settings"
-          shot 5-settings 5
-
-          open_url "joyride://welcome"
-          shot 6-welcome 5
-
-          open_url "joyride://drive/1794717720000?go=1"
-          shot 7-relive-navigation 60
-          shot 8-relive-navigation-later 30
+          # Logs, to see why anything went wrong.
+          xcrun simctl spawn "$DEVICE" log show --start "$START" --style compact \
+            --predicate 'process == "Joyride" OR eventMessage CONTAINS[c] "joyride"' > shots/app-log.txt 2>&1 || true
+          tail -c 400000 shots/app-log.txt > shots/app-log-tail.txt || true
+          rm -f shots/app-log.txt
+          cp ~/Library/Logs/DiagnosticReports/Joyride* shots/ 2>/dev/null || true
           ls -la shots
 
       - name: Save screenshots to a draft release
@@ -119,9 +129,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ls shots/*.png >/dev/null 2>&1 || exit 0
+          ls shots/* >/dev/null 2>&1 || exit 0
           gh release delete screenshots --yes --cleanup-tag 2>/dev/null || true
-          gh release create screenshots shots/*.png --draft --target "$GITHUB_SHA" \
+          gh release create screenshots shots/* --draft --target "$GITHUB_SHA" \
             --title "App screenshots" --notes "Simulator screenshots of the demo build. Draft: only the owner can see it."
 
       - name: Show build errors
