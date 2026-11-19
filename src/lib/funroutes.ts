@@ -431,8 +431,17 @@ export function highwayBlockPoints(steps: Step[], every = 300): LngLat[] {
 // Mapbox allows a few hundred route requests a minute; keep a handful in flight and back off when told to.
 let inFlight = 0;
 const waiting: (() => void)[] = [];
+const started: number[] = [];
 async function slot<T>(work: () => Promise<T>): Promise<T> {
   if (inFlight >= 6) await new Promise<void>((resolve) => waiting.push(resolve));
+  // Stay under about 250 requests a minute.
+  for (;;) {
+    const now = Date.now();
+    while (started.length && now - started[0] > 60000) started.shift();
+    if (started.length < 250) break;
+    await new Promise((r) => setTimeout(r, 60000 - (now - started[0]) + 50));
+  }
+  started.push(Date.now());
   inFlight++;
   try {
     return await work();
@@ -717,16 +726,15 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
         if (!spots.length) return null;
         let r = await routeThrough([origin, ...spots.map((s) => s.coord), dest], rules).catch(() => null);
         if (!r) return null;
-        // Spots the route only poked into and backed out of: swap them for a
-        // nearby through-street (twice at most), keeping the weave.
-        for (let pass = 0; pass < 2; pass++) {
-          const stubs = stubSpots(r.coords, spots);
-          if (!stubs.size) break;
-          const swapped = swapStubs(spots, stubs, candidates, rand);
-          const again = await routeThrough([origin, ...swapped.map((sp) => sp.coord), dest], rules).catch(() => null);
-          if (!again) break;
-          spots = swapped;
-          r = again;
+        // Drop spots the route only poked into and backed out of, and route again.
+        const stubs = stubSpots(r.coords, spots);
+        if (stubs.size) {
+          const kept = spots.filter((_, i) => !stubs.has(i));
+          const again = kept.length ? await routeThrough([origin, ...kept.map((sp) => sp.coord), dest], rules).catch(() => null) : null;
+          if (again) {
+            spots = kept;
+            r = again;
+          }
         }
         // No long straight shots: wherever the route runs too far without a
         // turn, add the nearest side street there and route again (twice at most).
@@ -770,16 +778,7 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
           spots = fewer;
           r = again;
         }
-        // Last tidy-up: swap any new stubs, and drop the few that still poke in and back out.
-        const late = stubSpots(r.coords, spots);
-        if (late.size) {
-          const swapped = swapStubs(spots, late, candidates, rand);
-          const again = await routeThrough([origin, ...swapped.map((sp) => sp.coord), dest], rules).catch(() => null);
-          if (again) {
-            spots = swapped;
-            r = again;
-          }
-        }
+        // Last tidy-up: drop the few spots that still poke in and back out (never a big share, or the weave goes flat).
         const lateStubs = stubSpots(r.coords, spots);
         if (lateStubs.size && lateStubs.size <= Math.max(2, spots.length * 0.1)) {
           const kept = spots.filter((_, i) => !lateStubs.has(i));
