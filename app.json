@@ -40,7 +40,8 @@
         }
       ],
       "./plugins/withCarPlay",
-      "./plugins/withMapboxEmbed"
+      "./plugins/withMapboxEmbed",
+      "./plugins/withoutPush"
     ],
     "experiments": {
       "typedRoutes": false

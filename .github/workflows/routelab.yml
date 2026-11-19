@@ -29,6 +29,7 @@ jobs:
           npx tsx tests/funroutes.test.ts
           npx tsx tests/streetgraph.test.ts
           npx tsx tests/streettiles.test.ts
+          npx tsx tests/parked.test.ts
       - name: Build and check routes
         env:
           EXPO_PUBLIC_MAPBOX_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
