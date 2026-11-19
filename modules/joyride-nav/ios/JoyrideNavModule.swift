@@ -35,8 +35,9 @@ public final class JoyrideNavModule: Module {
     /// - here: the driver's current [longitude, latitude]
     /// - joinNearest: join at the nearest point of the drive instead of its start
     /// - simulate: drive the route automatically (for testing)
+    /// - secret: a mystery destination; hide anything that would give away where it ends
     /// Resolves once guidance is on screen; `onNavigationEnded` fires when it closes.
-    AsyncFunction("startReplay") { (trace: [[Double]], here: [Double], joinNearest: Bool, simulate: Bool, promise: Promise) in
+    AsyncFunction("startReplay") { (trace: [[Double]], here: [Double], joinNearest: Bool, simulate: Bool, secret: Bool, promise: Promise) in
       let points = trace.compactMap(Self.coordinate)
       guard points.count >= 2 else {
         promise.reject("E_POINTS", "This drive doesn't have enough points to navigate.")
@@ -53,6 +54,7 @@ public final class JoyrideNavModule: Module {
             from: start,
             joinNearest: joinNearest,
             simulate: simulate,
+            secret: secret,
             presenter: self.appContext?.utilities?.currentViewController()
           ) { [weak self] canceled, arrived in
             self?.sendEvent("onNavigationEnded", ["canceled": canceled, "arrived": arrived])
@@ -150,6 +152,7 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     from here: CLLocationCoordinate2D,
     joinNearest: Bool,
     simulate: Bool,
+    secret: Bool = false,
     presenter: UIViewController?,
     onEnded: @escaping (Bool, Bool) -> Void
   ) async throws {
@@ -162,13 +165,19 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     guard !replay.isEmpty else { throw JoyrideNavError.tooShort }
     let routes = try await replay.firstRoutes(from: here, joinNearest: joinNearest)
 
+    // A mystery drive hides its end pin, overview and arrival time.
+    JoyrideTheme.secret = secret
+    let banner = BottomBannerViewController()
     let navigationOptions = NavigationOptions(
       mapboxNavigation: navigation,
       voiceController: provider.routeVoiceController,
       eventsManager: provider.eventsManager(),
-      styles: joyrideStyles()
+      styles: joyrideStyles(),
+      bottomBanner: banner
     )
     let controller = NavigationViewController(navigationRoutes: routes, navigationOptions: navigationOptions)
+    // Our own copy of the standard bottom bar, so it can show the whole drive; its End button still goes to the controller.
+    banner.delegate = controller
     controller.modalPresentationStyle = .fullScreen
     controller.routeLineTracksTraversal = true
     controller.delegate = self
@@ -176,6 +185,17 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     controller.automaticallyAdjustsStyleForTimeOfDay = false
     controller.usesNightStyleInDarkMode = true
     controller.styleManager.applyStyle(type: presenter.traitCollection.userInterfaceStyle == .light ? .day : .night)
+    if secret, let buttons = controller.floatingButtons, buttons.count > 1 {
+      // The first floating button is the route overview, which would show the end.
+      controller.floatingButtons = Array(buttons.dropFirst())
+    }
+    // The bottom bar shows the whole drive, not just the piece being guided.
+    replay.onWholeProgress = { [weak banner] meters, seconds in
+      DispatchQueue.main.async {
+        guard let banner, banner.isViewLoaded else { return }
+        JoyrideTheme.fill(banner, meters: meters, seconds: seconds, secret: secret)
+      }
+    }
 
     session = replay
     self.onEnded = onEnded

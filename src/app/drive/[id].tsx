@@ -133,7 +133,7 @@ export default function DriveScreen() {
         ]);
       });
       setPreparing(0);
-      await JoyrideNav.startReplay(trace, here, joinNearest, false);
+      await JoyrideNav.startReplay(trace, here, joinNearest, false, false);
     } catch (e: any) {
       Alert.alert('Couldn’t start navigation', e?.message ?? String(e));
     } finally {

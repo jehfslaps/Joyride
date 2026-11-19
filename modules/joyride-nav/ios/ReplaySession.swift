@@ -153,12 +153,19 @@ final class ReplaySession {
   private var busy = false
   private var lastDetourAt = Date.distantPast
   private var cancellables = Set<AnyCancellable>()
+  /// Meters from the start of the drive to each point.
+  private let cum: [Double]
+  /// Called with what's left of the whole drive (meters, seconds), not just the current piece.
+  var onWholeProgress: ((Double, Double) -> Void)?
 
   init(navigation: MapboxNavigation, trace: [CLLocationCoordinate2D]) {
     self.navigation = navigation
     let keep = Geo.thin(trace, spacing: Self.spacing)
     points = keep.map { trace[$0] }
     chunks = Geo.chunkRanges(points)
+    var c: [Double] = [0]
+    for i in 1..<max(1, points.count) { c.append(c[i - 1] + Geo.distance(points[i - 1], points[i])) }
+    cum = c
   }
 
   var isEmpty: Bool { points.count < 2 }
@@ -204,6 +211,7 @@ final class ReplaySession {
   // MARK: Progress
 
   private func handle(progress: RouteProgress) {
+    reportWhole(progress)
     guard !busy else { return }
     if let location = navigation.navigation().currentLocationMatching?.enhancedLocation.coordinate,
        phase == .main {
@@ -228,6 +236,24 @@ final class ReplaySession {
     case .finished:
       break
     }
+  }
+
+  /// The current piece's remaining distance and time, plus the rest of the
+  /// drive after it at the same pace.
+  private func reportWhole(_ progress: RouteProgress) {
+    guard let total = cum.last, total > 0 else { return }
+    let after: Double
+    switch phase {
+    case .main:
+      after = total - cum[min(cum.count - 1, chunks[min(chunkIndex, chunks.count - 1)].upperBound)]
+    case .approach, .detour:
+      after = total - cum[min(cum.count - 1, max(0, rejoinIndex))]
+    case .finished:
+      after = 0
+    }
+    let route = progress.route
+    let pace = route.distance > 0 ? route.expectedTravelTime / route.distance : 0.08
+    onWholeProgress?(progress.distanceRemaining + max(0, after), progress.durationRemaining + max(0, after) * pace)
   }
 
   private func handleOffRoute() {

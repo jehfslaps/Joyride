@@ -4,12 +4,14 @@ import '@/lib/recorder';
 import { Stack } from 'expo-router';
 import { useEffect } from 'react';
 import { syncDrivesToCarPlay } from '@/lib/storage';
+import { loadAppearance } from '@/lib/appearance';
 import { StatusBar } from 'expo-status-bar';
 import { useTheme } from '@/theme';
 
 export default function RootLayout() {
   const p = useTheme();
   useEffect(() => {
+    loadAppearance().catch(() => {});
     syncDrivesToCarPlay().catch(() => {});
   }, []);
 

@@ -11,6 +11,8 @@ type JoyrideNavNative = {
     here: [number, number],
     joinNearest: boolean,
     simulate: boolean,
+    /** Mystery destination: hide the end pin, overview, distance and arrival time. */
+    secret: boolean,
   ): Promise<void>;
   /** Keeps CarPlay's copy of the saved drives up to date. */
   syncDrives(drives: { id: string; title: string; subtitle: string; trace: [number, number][] }[]): Promise<void>;

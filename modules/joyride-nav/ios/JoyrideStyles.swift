@@ -92,6 +92,35 @@ struct JoyridePalette {
 }
 
 enum JoyrideTheme {
+  /// Set while a mystery drive is on screen.
+  nonisolated(unsafe) static var secret = false
+
+  /// Whole-drive numbers for the bottom bar. A mystery drive only gets a rough time.
+  @MainActor
+  static func fill(_ banner: BottomBannerViewController, meters: Double, seconds: Double, secret: Bool) {
+    let minutes = max(1, Int((seconds / 60).rounded()))
+    if secret {
+      let rough: String
+      if minutes < 10 {
+        rough = "about \(minutes) min"
+      } else if minutes < 60 {
+        rough = "about \(Int((Double(minutes) / 5).rounded()) * 5) min"
+      } else {
+        let hours = (Double(minutes) / 30).rounded() / 2
+        rough = hours == hours.rounded() ? "about \(Int(hours)) hr" : String(format: "about %.1f hr", hours)
+      }
+      banner.timeRemainingLabel.text = rough
+      banner.distanceRemainingLabel.text = "mystery drive"
+      banner.arrivalTimeLabel.text = nil
+      return
+    }
+    banner.timeRemainingLabel.text = minutes < 60 ? "\(minutes) min" : "\(minutes / 60) hr \(minutes % 60) min"
+    let miles = meters / 1609.344
+    banner.distanceRemainingLabel.text = miles >= 10 ? "\(Int(miles.rounded())) mi" : String(format: "%.1f mi", miles)
+    let arrive = Date().addingTimeInterval(seconds)
+    banner.arrivalTimeLabel.text = DateFormatter.localizedString(from: arrive, dateStyle: .none, timeStyle: .short)
+  }
+
   /// Banners, labels and buttons on the phone's navigation screen.
   @MainActor
   static func applyAppearance(_ p: JoyridePalette) {
@@ -161,8 +190,9 @@ enum JoyrideTheme {
     NavigationMapView.appearance(for: t).traversedRouteColor = p.brand.withAlphaComponent(0.3)
     NavigationMapView.appearance(for: t).maneuverArrowColor = p.text
     NavigationMapView.appearance(for: t).maneuverArrowStrokeColor = p.deep
-    NavigationMapView.appearance(for: t).waypointColor = p.text
-    NavigationMapView.appearance(for: t).waypointStrokeColor = p.deep
+    // Mystery drives don't mark where the route ends.
+    NavigationMapView.appearance(for: t).waypointColor = secret ? .clear : p.text
+    NavigationMapView.appearance(for: t).waypointStrokeColor = secret ? .clear : p.deep
   }
 
   /// The map itself: muted greens, no point-of-interest clutter, a glowing route and position dot.

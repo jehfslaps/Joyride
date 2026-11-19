@@ -20,7 +20,7 @@ import { enterFade, enterRise, exitFade, moveList, springFade } from '@/lib/moti
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { JoyrideNav } from '../../modules/joyride-nav';
 import { ContextChip, GlassCard, GlassRow, GlowRoute, HeroNumber, Label, LivePuck, PinTile, PressableScale, PrimaryPill, RoundButton, SpotDot, TwoTone, useMapLook, Vignette } from '@/components/ui';
-import { buildFunRoutes, NO_RULES, VisitedStreets, type RoadRules, type RouteOption } from '@/lib/funroutes';
+import { buildFunRoutes, describe, NO_RULES, VisitedStreets, type RoadRules, type RouteOption } from '@/lib/funroutes';
 import { formatMiles, type LngLat } from '@/lib/geo';
 import { searchPlaces, type Place } from '@/lib/places';
 import { getRecorderState, startRecording } from '@/lib/recorder';
@@ -149,18 +149,45 @@ export default function FunRoutesScreen() {
 
   const chosen = useMemo(() => routes.find((r) => r.id === selected) ?? null, [routes, selected]);
 
-  // Keep the map framing everything.
+  // Mystery: nothing on the map gives away the end, unless you're holding Peek.
+  const [peek, setPeek] = useState(false);
+  const hide = secret && !peek;
+
+  // Keep the map framing everything (in a mystery, just you).
   useEffect(() => {
+    if (hide) {
+      if (here) map.current?.animateCamera({ center: toLatLng(here), zoom: 13.5, altitude: 9000 }, { duration: 600 });
+      return;
+    }
     const pts: LngLat[] = [];
     if (here) pts.push(here);
-    if (dest && !secret) pts.push(dest.coord);
+    if (dest) pts.push(dest.coord);
     for (const r of chosen ? [chosen] : routes) pts.push(...r.coords.filter((_, i) => i % 10 === 0));
     if (pts.length < 2) return;
     map.current?.fitToCoordinates(pts.map(toLatLng), {
       edgePadding: { top: insets.top + 90, right: 40, bottom: 40, left: 40 },
       animated: true,
     });
-  }, [routes.length, chosen, here, dest, secret, insets.top]);
+  }, [routes.length, chosen, here, dest, hide, insets.top]);
+
+  // When a mystery drive ends, reveal where it was going.
+  const reveal = useRef({ secret, name: dest?.name ?? '' });
+  reveal.current = { secret, name: dest?.name ?? '' };
+  useEffect(() => {
+    const sub = JoyrideNav?.addListener('onNavigationEnded', ({ arrived }) => {
+      const { secret: wasSecret, name } = reveal.current;
+      if (!wasSecret) return;
+      if (arrived) {
+        Alert.alert('You made it', name ? `This was the mystery: ${name}.` : 'That was the mystery destination.');
+      } else {
+        Alert.alert('Want to know where you were headed?', undefined, [
+          { text: 'Keep it a mystery', style: 'cancel' },
+          { text: 'Show me', onPress: () => Alert.alert('The mystery destination', name || 'A random spot') },
+        ]);
+      }
+    });
+    return () => sub?.remove();
+  }, []);
 
   async function go() {
     if (!chosen || !here) return;
@@ -171,7 +198,8 @@ export default function FunRoutesScreen() {
     setStarting(true);
     try {
       if (record && (await getRecorderState()) !== 'recording') await startRecording().catch(() => null);
-      await JoyrideNav.startReplay(chosen.coords, here, false, false);
+      setPeek(false);
+      await JoyrideNav.startReplay(chosen.coords, here, false, false, secret);
     } catch (e: any) {
       Alert.alert('Couldn’t start navigation', e?.message ?? String(e));
     } finally {
@@ -188,16 +216,16 @@ export default function FunRoutesScreen() {
     <View style={s.screen}>
       <View style={s.mapWrap}>
         <MapView ref={map} style={StyleSheet.absoluteFill} showsUserLocation={false} {...mapLook}>
-          {routes
-            .filter((r) => r.id !== selected)
-            .map((r) => (
-              <GlowRoute key={r.id} coords={r.coords} dim onPress={() => setSelected(r.id)} />
-            ))}
-          {chosen && <GlowRoute key={`on-${chosen.id}`} coords={chosen.coords} z={5} />}
-          {chosen?.via
-            .filter((v) => v.kind !== 'street')
-            .map((v, i) => <SpotDot key={`via-${i}`} at={v.coord} kind={v.kind as 'culdesac' | 'odd'} />)}
-          {dest && !secret && <PinTile at={dest.coord} />}
+          {!hide &&
+            routes
+              .filter((r) => r.id !== selected)
+              .map((r) => <GlowRoute key={r.id} coords={r.coords} dim onPress={() => setSelected(r.id)} />)}
+          {!hide && chosen && <GlowRoute key={`on-${chosen.id}`} coords={chosen.coords} z={5} />}
+          {!hide &&
+            chosen?.via
+              .filter((v) => v.kind === 'culdesac' || v.kind === 'odd')
+              .map((v, i) => <SpotDot key={`via-${i}`} at={v.coord} kind={v.kind as 'culdesac' | 'odd'} />)}
+          {dest && !hide && <PinTile at={dest.coord} />}
           {here && <LivePuck at={here} />}
         </MapView>
         <Vignette edge="top" height={insets.top + 90} />
@@ -269,6 +297,16 @@ export default function FunRoutesScreen() {
             ListHeaderComponent={
               <View style={{ gap: 12, marginBottom: 4 }}>
                 <View style={s.chips}>
+                  {secret && (
+                    <Pressable
+                      onPressIn={() => setPeek(true)}
+                      onPressOut={() => setPeek(false)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Hold to peek at the destination"
+                    >
+                      <ContextChip label={peek ? 'Peeking' : 'Hold to peek'} icon={peek ? 'eye-outline' : 'eye-off-outline'} on={peek} />
+                    </Pressable>
+                  )}
                   <ContextChip prefix="Avoid" label="Freeways" on={!!rules?.noFreeways} onPress={() => toggle('noFreeways')} accessibilityRole="switch" />
                   <ContextChip prefix="Avoid" label="Highways" on={!!rules?.noHighways} onPress={() => toggle('noHighways')} accessibilityRole="switch" />
                 </View>
@@ -296,11 +334,13 @@ export default function FunRoutesScreen() {
                     </View>
                     <View style={{ flex: 1, gap: 2 }}>
                       <Text style={t.bodyStrong}>{item.title}</Text>
-                      <Text style={t.caption} numberOfLines={2}>{item.blurb}</Text>
+                      <Text style={t.caption} numberOfLines={2}>
+                        {secret ? describe([], item.culDeSacs, []) : item.blurb}
+                      </Text>
                       <Text style={[t.caption, { color: p.text3 }]} numberOfLines={1}>
-                        {formatMiles(item.distanceM)}
+                        {secret ? 'Mystery route' : formatMiles(item.distanceM)}
                         {item.newShare != null && item.style !== 'fastest' ? ` · ${Math.round(item.newShare * 100)}% new to you` : ''}
-                        {item.usesHighway ? ` · ${formatMiles(item.highwayM)} on a highway (no way around)` : ''}
+                        {item.usesHighway && !secret ? ` · ${formatMiles(item.highwayM)} on a highway (no way around)` : ''}
                       </Text>
                     </View>
                   </GlassCard>
@@ -361,7 +401,7 @@ const useStyles = makeStyles((p, t) => ({
   destPill: { height: 44, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16 },
   destTo: { color: p.text3, fontWeight: '500', fontSize: 14 },
   destName: { flex: 1, color: p.mint, fontWeight: '700', fontSize: 16 },
-  chips: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
   routeRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 14 },
   timeCol: { width: 56, alignItems: 'flex-start' },
   routeTime: { fontSize: 28, fontWeight: '700', letterSpacing: -1, fontVariant: ['tabular-nums'] },

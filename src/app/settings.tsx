@@ -1,11 +1,13 @@
 import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { Alert, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { JoyrideNav } from '../../modules/joyride-nav';
 import { deleteDrive, listDrives } from '@/lib/storage';
-import { GlassRow, ScreenHeader } from '@/components/ui';
+import { GlassRow, Label, ScreenHeader, Segmented } from '@/components/ui';
+import { loadAppearance, setAppearance, type AppearanceChoice } from '@/lib/appearance';
 import { makeStyles, typeFor, useTheme } from '@/theme';
 
 export const PRIVACY_URL = 'https://jehfslaps.github.io/Joyride/privacy.html';
@@ -16,6 +18,10 @@ export default function Settings() {
   const p = useTheme();
   const t = typeFor(p);
   const s = useStyles();
+  const [look, setLook] = useState<AppearanceChoice>('auto');
+  useEffect(() => {
+    loadAppearance().then(setLook).catch(() => {});
+  }, []);
   const version = Constants.expoConfig?.version ?? '1.0.0';
 
   function deleteAll() {
@@ -41,7 +47,23 @@ export default function Settings() {
         <GlassRow icon="shield-lock-outline" title="Privacy policy" onPress={() => Linking.openURL(PRIVACY_URL)} />
         <GlassRow icon="lifebuoy" title="Help and feedback" onPress={() => Linking.openURL(SUPPORT_URL)} />
         <GlassRow icon="information-outline" title="Show the welcome screen" onPress={() => router.push('/welcome')} />
-        <GlassRow icon="theme-light-dark" title="Light and dark" detail="Follows your iPhone’s appearance, turn-by-turn too" />
+        <Label style={{ marginTop: 8 }}>APPEARANCE</Label>
+        <Segmented
+          options={[
+            { value: 'auto', label: 'Automatic' },
+            { value: 'dark', label: 'Dark' },
+            { value: 'light', label: 'Light' },
+          ]}
+          value={look}
+          onChange={(v) => {
+            setLook(v);
+            setAppearance(v);
+          }}
+        />
+        <Text style={t.caption}>
+          {look === 'auto' ? 'Follows your iPhone’s Light or Dark setting.' : `Joyride stays ${look}, whatever your iPhone is set to.`} Turn-by-turn matches.
+        </Text>
+        <View style={{ height: 8 }} />
         <GlassRow icon="delete-outline" title="Delete all drives" danger onPress={deleteAll} />
 
         <Text style={[t.caption, { textAlign: 'center', marginTop: 12 }]}>

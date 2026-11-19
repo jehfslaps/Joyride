@@ -254,11 +254,11 @@ export interface Level {
 }
 
 export const LEVELS: Level[] = [
-  { amplitude: 450, wavelength: 3200, spacing: 300, maxStraight: 800, culPer10km: 1, minCul: 1, maxCul: 3, maxSpots: 70, odds: 1, title: 'A few side streets' },
-  { amplitude: 650, wavelength: 2800, spacing: 250, maxStraight: 650, culPer10km: 2, minCul: 1, maxCul: 5, maxSpots: 100, odds: 1, title: 'Side-street wander' },
-  { amplitude: 900, wavelength: 2500, spacing: 210, maxStraight: 500, culPer10km: 3, minCul: 2, maxCul: 7, maxSpots: 140, odds: 2, title: 'Neighborhood zigzag' },
-  { amplitude: 1150, wavelength: 2300, spacing: 180, maxStraight: 400, culPer10km: 5, minCul: 2, maxCul: 10, maxSpots: 180, odds: 2, title: 'Deep zigzag' },
-  { amplitude: 1400, wavelength: 2100, spacing: 150, maxStraight: 320, culPer10km: 7, minCul: 3, maxCul: 14, maxSpots: 230, odds: 3, title: 'Every nook' },
+  { amplitude: 800, wavelength: 5000, spacing: 700, maxStraight: 800, culPer10km: 1, minCul: 1, maxCul: 3, maxSpots: 45, odds: 1, title: 'A few side streets' },
+  { amplitude: 1000, wavelength: 4200, spacing: 520, maxStraight: 650, culPer10km: 2, minCul: 1, maxCul: 5, maxSpots: 65, odds: 1, title: 'Side-street wander' },
+  { amplitude: 1200, wavelength: 3600, spacing: 400, maxStraight: 500, culPer10km: 3, minCul: 2, maxCul: 7, maxSpots: 90, odds: 2, title: 'Neighborhood zigzag' },
+  { amplitude: 1400, wavelength: 3000, spacing: 300, maxStraight: 400, culPer10km: 5, minCul: 2, maxCul: 10, maxSpots: 120, odds: 2, title: 'Deep zigzag' },
+  { amplitude: 1600, wavelength: 2600, spacing: 220, maxStraight: 320, culPer10km: 7, minCul: 3, maxCul: 14, maxSpots: 160, odds: 3, title: 'Every nook' },
 ];
 
 /** Spots closer than this to the quick way just touch the corner of a side street. */
@@ -718,7 +718,7 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
           r = again;
         }
         // A route that wandered off far beyond what was asked isn't fun, it's broken.
-        if (r.durationS > base.durationS * 5 && r.durationS > base.durationS + 90 * 60) return null;
+        if (r.durationS > base.durationS * 8 && r.durationS > base.durationS + 120 * 60) return null;
         const via = spots.map(({ coord, kind, name }) => ({ coord, kind, name }));
         const passes = [...new Set(spots.filter((s) => s.kind === 'odd').map((s) => s.name))].slice(0, 2);
         const culDeSacs = spots.filter((s) => s.kind === 'culdesac').length;
