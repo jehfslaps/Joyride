@@ -16,9 +16,7 @@ const ANY = { noFreeways: false, noHighways: false };
 const NONE = { noFreeways: true, noHighways: true };
 const TRIPS: { name: string; to: LngLat; rules: RoadRules; cs: boolean }[] = [
   { name: 'la-habra', to: [-117.9462, 33.9319], rules: ANY, cs: false },
-  { name: 'la-habra', to: [-117.9462, 33.9319], rules: ANY, cs: true },
   { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: ANY, cs: false },
-  { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: ANY, cs: true },
   { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: NONE, cs: false },
   { name: 'hacienda-heights', to: [-117.9687, 33.9931], rules: ANY, cs: false },
   { name: 'laguna-beach', to: [-117.7831, 33.5427], rules: NONE, cs: false },

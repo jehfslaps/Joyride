@@ -236,37 +236,47 @@ export interface Level {
   /** Cul-de-sacs per 10 km of trip, and at least this many. */
   culPer10km: number;
   minCul: number;
+  maxCul: number;
+  /** At most this many spots, so long trips stay sensible. */
+  maxSpots: number;
   odds: number;
   title: string;
 }
 
 export const LEVELS: Level[] = [
-  { reach: 350, coverage: 0.3, culPer10km: 1, minCul: 1, odds: 1, title: 'A few side streets' },
-  { reach: 450, coverage: 0.45, culPer10km: 2, minCul: 1, odds: 1, title: 'Side-street wander' },
-  { reach: 600, coverage: 0.65, culPer10km: 3, minCul: 2, odds: 2, title: 'Neighborhood weave' },
-  { reach: 750, coverage: 0.85, culPer10km: 5, minCul: 2, odds: 2, title: 'Deep weave' },
-  { reach: 900, coverage: 1, culPer10km: 7, minCul: 3, odds: 3, title: 'The long weave' },
+  { reach: 400, coverage: 0.3, culPer10km: 1, minCul: 1, maxCul: 2, maxSpots: 16, odds: 1, title: 'A few side streets' },
+  { reach: 500, coverage: 0.45, culPer10km: 2, minCul: 1, maxCul: 4, maxSpots: 26, odds: 1, title: 'Side-street wander' },
+  { reach: 650, coverage: 0.65, culPer10km: 3, minCul: 2, maxCul: 6, maxSpots: 40, odds: 2, title: 'Neighborhood weave' },
+  { reach: 800, coverage: 0.85, culPer10km: 5, minCul: 2, maxCul: 9, maxSpots: 55, odds: 2, title: 'Deep weave' },
+  { reach: 950, coverage: 1, culPer10km: 7, minCul: 3, maxCul: 12, maxSpots: 70, odds: 3, title: 'The long weave' },
 ];
 
-/** Spots inside a pocket are about this far apart, so the route stays on side streets between them. */
-export const SPOT_SPACING = 450;
+/**
+ * Spots inside a pocket are about this far apart. Close enough that ducking
+ * back out to the main road between two of them is never quicker, so the
+ * route stays on the side streets.
+ */
+export const SPOT_SPACING = 260;
 /** Spots closer than this to the main route just touch the corner of a side street. */
 const MIN_REACH = 90;
 
-/** Stretches of the trip to weave through, alternating sides: [start, end, side]. */
-export function pocketsFor(tripM: number, level: Level, rand: () => number): [number, number, number][] {
+/** Stretches of the trip to weave through, alternating sides: [start, end, side, depth]. */
+export function pocketsFor(tripM: number, level: Level, rand: () => number): [number, number, number, number][] {
   const lo = tripM * 0.04;
   const hi = tripM * 0.96;
   const span = hi - lo;
   const len = Math.min(2500, Math.max(900, tripM * 0.12));
-  const count = Math.max(1, Math.round((span * level.coverage) / len));
+  const coverage = Math.min(level.coverage, (level.maxSpots * SPOT_SPACING) / span);
+  const count = Math.max(1, Math.round((span * coverage) / len));
   const pocket = Math.min(len, span / count);
   const gap = (span - pocket * count) / (count + 1);
-  const out: [number, number, number][] = [];
+  const out: [number, number, number, number][] = [];
   let side = rand() < 0.5 ? 1 : -1;
   for (let i = 0; i < count; i++) {
     const a = lo + gap * (i + 1) + pocket * i;
-    out.push([a, a + pocket, side]);
+    // How deep into the neighborhood this pocket runs.
+    const depth = Math.max(180, level.reach * (0.4 + rand() * 0.45));
+    out.push([a, a + pocket, side, depth]);
     side = -side;
   }
   return out;
@@ -280,11 +290,11 @@ export function pocketsFor(tripM: number, level: Level, rand: () => number): [nu
  */
 export function pickSpots(candidates: Candidate[], tripM: number, level: Level, rand: () => number): Candidate[] {
   const pockets = pocketsFor(tripM, level, rand);
-  const bins: { lo: number; hi: number; side: number; pool: Candidate[] }[] = [];
-  for (const [a, b, side] of pockets) {
+  const bins: { lo: number; hi: number; side: number; depth: number; pool: Candidate[] }[] = [];
+  for (const [a, b, side, depth] of pockets) {
     const n = Math.max(1, Math.round((b - a) / SPOT_SPACING));
     const w = (b - a) / n;
-    for (let i = 0; i < n; i++) bins.push({ lo: a + w * i, hi: a + w * (i + 1), side, pool: [] });
+    for (let i = 0; i < n; i++) bins.push({ lo: a + w * i, hi: a + w * (i + 1), side, depth, pool: [] });
   }
   for (const c of candidates) {
     const reach = Math.abs(c.side);
@@ -300,7 +310,7 @@ export function pickSpots(candidates: Candidate[], tripM: number, level: Level, 
     shuffle(open, rand);
     for (const i of open.slice(0, count)) special.set(i, kind);
   };
-  assign('culdesac', Math.max(level.minCul, Math.round((level.culPer10km * tripM) / 10000)));
+  assign('culdesac', Math.min(level.maxCul, Math.max(level.minCul, Math.round((level.culPer10km * tripM) / 10000))));
   assign('odd', level.odds);
 
   const picked: Candidate[] = [];
@@ -312,9 +322,19 @@ export function pickSpots(candidates: Candidate[], tripM: number, level: Level, 
     const onSide = pool.filter((c) => Math.sign(c.side) === bin.side || c.kind === 'odd');
     if (onSide.length) pool = onSide;
     else if (!pool.every((c) => c.kind === 'culdesac')) return; // only cross the main road for a cul-de-sac
+    // Plain streets stay at about the pocket's depth, so the route runs along
+    // inside the neighborhood instead of bouncing in and out of it.
+    if (want === 'street') {
+      const steady = pool.filter((c) => Math.abs(Math.abs(c.side) - bin.depth) < 160);
+      if (steady.length) pool = steady;
+    }
     const choice = weightedPick(pool, (c) => (c.isNew ? 3 : 1), rand);
     const last = picked[picked.length - 1];
-    if (last && distance(last.coord, choice.coord) < 150) return;
+    if (last && distance(last.coord, choice.coord) < 110) {
+      // Too close to the previous spot: a cul-de-sac or odd spot wins over a plain street.
+      if (choice.kind === 'street' || last.kind !== 'street') return;
+      picked.pop();
+    }
     picked.push(choice);
   });
   return picked.sort((a, b) => a.along - b.along);
