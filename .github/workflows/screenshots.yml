@@ -101,20 +101,25 @@ jobs:
             else
               xcrun simctl spawn "$DEVICE" defaults delete "$BUNDLE_ID" demoRoute 2>/dev/null || true
             fi
-            xcrun simctl launch "$DEVICE" "$BUNDLE_ID" || true
+            SIMCTL_CHILD_TZ=America/Los_Angeles xcrun simctl launch "$DEVICE" "$BUNDLE_ID" || true
             sleep "$wait"
             xcrun simctl io "$DEVICE" screenshot "shots/$name.png"
           }
 
-          screen 1-home "" 45
-          screen 2-saved-drive "/drive/1794114300000" 12
-          screen 3-fun-routes "/routes?lng=-117.7831&lat=33.5427&name=Laguna%20Beach&pick=weave" 60
-          screen 4-surprise-me "/surprise" 10
-          screen 5-settings "/settings" 8
-          screen 6-welcome "/welcome" 8
-          screen 7-relive-navigation "/drive/1794717720000?go=1" 60
+          for LOOK in dark light; do
+            xcrun simctl ui "$DEVICE" appearance "$LOOK"
+            sleep 2
+            screen "$LOOK-1-home" "" 40
+            screen "$LOOK-2-saved-drive" "/drive/1794114300000" 12
+            screen "$LOOK-3-fun-routes" "/routes?lng=-117.9243&lat=33.8704&name=Downtown%20Fullerton&pick=weave" 50
+            screen "$LOOK-4-surprise-me" "/surprise" 10
+            screen "$LOOK-5-settings" "/settings" 8
+            screen "$LOOK-6-welcome" "/welcome" 8
+          done
+          xcrun simctl ui "$DEVICE" appearance dark
+          screen dark-7-relive-navigation "/drive/1794717720000?go=1" 60
           sleep 30
-          xcrun simctl io "$DEVICE" screenshot shots/8-relive-navigation-later.png
+          xcrun simctl io "$DEVICE" screenshot shots/dark-8-relive-navigation-later.png
 
           # Logs, to see why anything went wrong.
           xcrun simctl spawn "$DEVICE" log show --start "$START" --style compact \

@@ -14,16 +14,16 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { JoyrideNav } from '../../modules/joyride-nav';
-import { BigButton } from '@/components/BigButton';
+import { ContextChip, GlassCard, GlassRow, GlowRoute, HeroNumber, Label, LivePuck, PinTile, PrimaryPill, RoundButton, SpotDot, TwoTone, useMapLook, Vignette } from '@/components/ui';
 import { buildFunRoutes, NO_RULES, VisitedStreets, type RoadRules, type RouteOption } from '@/lib/funroutes';
 import { formatDuration, formatMiles, type LngLat } from '@/lib/geo';
 import { searchPlaces, type Place } from '@/lib/places';
 import { getRecorderState, startRecording } from '@/lib/recorder';
 import { getDrivePoints, listDrives } from '@/lib/storage';
-import { colors, radius, type } from '@/theme';
+import { makeStyles, typeFor, useTheme } from '@/theme';
 
 const toLatLng = (c: LngLat) => ({ latitude: c[1], longitude: c[0] });
 const RULES_KEY = 'joyride:roadRules';
@@ -41,6 +41,10 @@ async function loadVisited(): Promise<VisitedStreets> {
 export default function FunRoutesScreen() {
   const params = useLocalSearchParams<{ lng?: string; lat?: string; name?: string; secret?: string; pick?: string }>();
   const insets = useSafeAreaInsets();
+  const p = useTheme();
+  const t = typeFor(p);
+  const s = useStyles();
+  const mapLook = useMapLook();
   const map = useRef<MapView>(null);
   const secret = params.secret === '1';
 
@@ -175,68 +179,62 @@ export default function FunRoutesScreen() {
 
   const destLabel = secret ? 'Mystery destination' : dest?.name ?? '';
 
+  const arrive = chosen ? new Date(Date.now() + chosen.durationS * 1000).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
+  const extraMin = chosen && routes[0] ? Math.round((chosen.durationS - routes[0].durationS) / 60) : 0;
+
   return (
-    <View style={styles.screen}>
-      <View style={styles.mapWrap}>
-        <MapView ref={map} style={StyleSheet.absoluteFill} userInterfaceStyle="dark" showsUserLocation showsPointsOfInterests={false}>
-          {routes.map((r) => (
-            <Polyline
-              key={r.id}
-              coordinates={r.coords.map(toLatLng)}
-              strokeColor={r.id === selected ? colors.amber : 'rgba(139,148,163,0.55)'}
-              strokeWidth={r.id === selected ? 6 : 3}
-              zIndex={r.id === selected ? 2 : 1}
-              tappable
-              onPress={() => setSelected(r.id)}
-            />
-          ))}
+    <View style={s.screen}>
+      <View style={s.mapWrap}>
+        <MapView ref={map} style={StyleSheet.absoluteFill} showsUserLocation={false} {...mapLook}>
+          {routes
+            .filter((r) => r.id !== selected)
+            .map((r) => (
+              <GlowRoute key={r.id} coords={r.coords} dim onPress={() => setSelected(r.id)} />
+            ))}
+          {chosen && <GlowRoute key={`on-${chosen.id}`} coords={chosen.coords} z={5} />}
           {chosen?.via
             .filter((v) => v.kind !== 'street')
-            .map((v, i) => (
-              <Marker key={`via-${i}`} coordinate={toLatLng(v.coord)} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
-                <View style={[styles.viaDot, { backgroundColor: v.kind === 'culdesac' ? colors.red : colors.green }]} />
-              </Marker>
-            ))}
-          {dest && !secret && (
-            <Marker coordinate={toLatLng(dest.coord)} tracksViewChanges={false}>
-              <View style={styles.flag}>
-                <MaterialCommunityIcons name="flag-checkered" size={16} color={colors.bg} />
-              </View>
-            </Marker>
-          )}
+            .map((v, i) => <SpotDot key={`via-${i}`} at={v.coord} kind={v.kind as 'culdesac' | 'odd'} />)}
+          {dest && !secret && <PinTile at={dest.coord} />}
+          {here && <LivePuck at={here} />}
         </MapView>
-        <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
-          <Pressable onPress={() => router.back()} hitSlop={8} style={styles.round} accessibilityLabel="Back">
-            <MaterialCommunityIcons name="chevron-left" size={28} color={colors.text} />
-          </Pressable>
+        <Vignette edge="top" height={insets.top + 90} />
+        <Vignette edge="bottom" height={60} />
+        <View style={[s.topBar, { paddingTop: insets.top + 6 }]}>
+          <RoundButton icon="chevron-left" onPress={() => router.back()} label="Back" />
           {dest ? (
             <Pressable
-              style={styles.destPill}
+              style={{ flex: 1 }}
               onPress={() => {
                 if (params.lng) return;
                 setDest(null);
                 setRoutes([]);
               }}
+              accessibilityRole="button"
+              accessibilityLabel={params.lng ? destLabel : `To ${destLabel}. Tap to change.`}
             >
-              <Text style={styles.destTo}>To</Text>
-              <Text style={styles.destName} numberOfLines={1}>{destLabel}</Text>
-              {!params.lng && <MaterialCommunityIcons name="close-circle" size={18} color={colors.muted} />}
+              <GlassCard radiusSize={22} strong style={s.destPill}>
+                <Text style={s.destTo}>To</Text>
+                <Text style={s.destName} numberOfLines={1}>{destLabel}</Text>
+                {!params.lng && <MaterialCommunityIcons name="close-circle" size={18} color={p.text3} />}
+              </GlassCard>
             </Pressable>
-          ) : (
-            <View style={styles.searchBox}>
-              <MaterialCommunityIcons name="magnify" size={20} color={colors.muted} />
+          ) : null}
+          {dest ? <RoundButton icon="shuffle-variant" onPress={() => !building && setShuffle((n) => n + 1)} label="New routes" /> : (
+            <GlassCard radiusSize={22} strong style={[s.searchBox, { flex: 1 }]}>
+              <MaterialCommunityIcons name="magnify" size={20} color={p.text2} />
               <TextInput
                 value={query}
                 onChangeText={setQuery}
                 placeholder="Where to?"
-                placeholderTextColor={colors.faint}
-                style={styles.searchInput}
+                placeholderTextColor={p.text3}
+                style={s.searchInput}
                 autoFocus
                 returnKeyType="search"
                 accessibilityLabel="Destination"
               />
-              {searching && <ActivityIndicator color={colors.muted} />}
-            </View>
+              {searching && <ActivityIndicator color={p.text2} />}
+            </GlassCard>
           )}
         </View>
       </View>
@@ -244,136 +242,99 @@ export default function FunRoutesScreen() {
       {!dest ? (
         <FlatList
           data={results}
-          keyExtractor={(p, i) => `${p.name}-${i}`}
-          contentContainerStyle={{ padding: 20, gap: 10, paddingBottom: insets.bottom + 24 }}
+          keyExtractor={(pl, i) => `${pl.name}-${i}`}
+          contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: insets.bottom + 24 }}
+          keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
-            <Text style={[type.small, { textAlign: 'center', marginTop: 12 }]}>
+            <Text style={[t.caption, { textAlign: 'center', marginTop: 12 }]}>
               {query.trim().length < 3 ? 'Type a place, address, or city.' : searching ? '' : 'No matches yet.'}
             </Text>
           }
-          renderItem={({ item }) => (
-            <Pressable onPress={() => setDest(item)} style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.cardHi }]}>
-              <MaterialCommunityIcons name="map-marker" size={22} color={colors.amber} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.rowTitle} numberOfLines={1}>{item.name}</Text>
-                {!!item.detail && <Text style={type.small} numberOfLines={1}>{item.detail}</Text>}
-              </View>
-            </Pressable>
-          )}
+          renderItem={({ item }) => <GlassRow icon="map-marker-outline" title={item.name} detail={item.detail || undefined} onPress={() => setDest(item)} />}
         />
       ) : (
         <View style={{ flex: 1 }}>
           <FlatList
             data={routes}
             keyExtractor={(r) => r.id}
-            contentContainerStyle={{ padding: 20, gap: 8, paddingBottom: 12 }}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, gap: 8, paddingBottom: 12 }}
             ListHeaderComponent={
               <View style={{ gap: 12, marginBottom: 4 }}>
-                <View style={styles.chips}>
-                  <Chip label="No freeways" on={!!rules?.noFreeways} onPress={() => toggle('noFreeways')} />
-                  <Chip label="No highways" on={!!rules?.noHighways} onPress={() => toggle('noHighways')} />
-                  <View style={{ flex: 1 }} />
-                  <Pressable
-                    onPress={() => setShuffle((n) => n + 1)}
-                    disabled={building}
-                    hitSlop={8}
-                    style={({ pressed }) => [styles.shuffle, (pressed || building) && { opacity: 0.5 }]}
-                    accessibilityLabel="New routes"
-                  >
-                    <MaterialCommunityIcons name="shuffle-variant" size={18} color={colors.text} />
-                    <Text style={styles.shuffleText}>New</Text>
-                  </Pressable>
+                <View style={s.chips}>
+                  <ContextChip prefix="Avoid" label="Freeways" on={!!rules?.noFreeways} onPress={() => toggle('noFreeways')} accessibilityRole="switch" />
+                  <ContextChip prefix="Avoid" label="Highways" on={!!rules?.noHighways} onPress={() => toggle('noHighways')} accessibilityRole="switch" />
                 </View>
-                <Text style={type.label}>
-                  {building ? 'FINDING SIDE STREETS…' : `${routes.length} ROUTES, FASTEST TO LONGEST`}
-                </Text>
+                <Label>{building ? 'FINDING SIDE STREETS…' : `${routes.length} ROUTES · FASTEST TO LONGEST`}</Label>
               </View>
             }
-            ListFooterComponent={building ? <ActivityIndicator color={colors.amber} style={{ marginTop: 8 }} /> : undefined}
+            ListFooterComponent={building ? <ActivityIndicator color={p.brand} style={{ marginTop: 8 }} /> : undefined}
             renderItem={({ item }) => {
               const on = item.id === selected;
               return (
                 <Pressable
                   onPress={() => setSelected(item.id)}
-                  style={[styles.routeRow, on && styles.routeRowOn]}
                   accessibilityRole="button"
                   accessibilityState={{ selected: on }}
+                  style={({ pressed }) => ({ transform: [{ scale: pressed ? 0.99 : 1 }] })}
                 >
-                  <Text style={[styles.routeTime, on && { color: colors.amber }, item.style === 'fastest' && !on && { color: colors.muted }]}>
-                    {formatDuration(item.durationS * 1000)}
-                  </Text>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.rowTitle}>{item.title}</Text>
-                    <Text style={type.small} numberOfLines={2}>
-                      {item.blurb}
-                    </Text>
-                    <Text style={[type.small, { color: colors.faint }]} numberOfLines={1}>
-                      {formatMiles(item.distanceM)}
-                      {item.newShare != null && item.style !== 'fastest' ? ` · ${Math.round(item.newShare * 100)}% new to you` : ''}
-                      {item.usesHighway ? ` · ${formatMiles(item.highwayM)} on a highway (no way around)` : ''}
-                    </Text>
-                  </View>
+                  <GlassCard style={[s.routeRow, on && { borderColor: p.brand, borderWidth: 1.5 }]} glow={on}>
+                    <View style={s.timeCol}>
+                      <Text style={[s.routeTime, { color: on ? p.mint : item.style === 'fastest' ? p.text2 : p.mint }]}>
+                        {Math.round(item.durationS / 60)}
+                      </Text>
+                      <Text style={t.caption}>min</Text>
+                    </View>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={t.bodyStrong}>{item.title}</Text>
+                      <Text style={t.caption} numberOfLines={2}>{item.blurb}</Text>
+                      <Text style={[t.caption, { color: p.text3 }]} numberOfLines={1}>
+                        {formatMiles(item.distanceM)}
+                        {item.newShare != null && item.style !== 'fastest' ? ` · ${Math.round(item.newShare * 100)}% new to you` : ''}
+                        {item.usesHighway ? ` · ${formatMiles(item.highwayM)} on a highway (no way around)` : ''}
+                      </Text>
+                    </View>
+                  </GlassCard>
                 </Pressable>
               );
             }}
           />
-          <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
-            <View style={styles.recordRow}>
-              <Text style={[type.body, { flex: 1 }]}>Record this drive</Text>
-              <Switch value={record} onValueChange={setRecord} trackColor={{ true: colors.amber }} accessibilityLabel="Record this drive" />
+          <GlassCard radiusSize={32} glow style={[s.sheet, { paddingBottom: insets.bottom + 12 }]}>
+            {chosen ? (
+              <View style={s.sheetTop}>
+                <HeroNumber
+                  value={String(Math.round(chosen.durationS / 60))}
+                  unit="min"
+                  size={52}
+                  caption={<TwoTone lead={chosen.style === 'fastest' ? 'Quickest ·' : extraMin > 0 ? `+${extraMin} min of side streets ·` : 'Side streets ·'} value={secret ? 'mystery arrival' : `arrive ${arrive}`} size="body" />}
+                />
+              </View>
+            ) : null}
+            <View style={s.recordRow}>
+              <Text style={[t.body, { flex: 1 }]}>Record this drive</Text>
+              <Switch value={record} onValueChange={setRecord} trackColor={{ true: p.brand }} accessibilityLabel="Record this drive" />
             </View>
-            <BigButton
-              label={chosen ? (chosen.style === 'fastest' ? 'Go the quick way' : 'Start this route') : 'Pick a route'}
-              icon="steering"
-              onPress={go}
-              disabled={!chosen}
-              busy={starting}
-            />
-          </View>
+            <PrimaryPill label={chosen ? 'Start' : 'Pick a route'} trailingIcon={chosen ? 'chevron-right' : undefined} onPress={go} disabled={!chosen} busy={starting} />
+          </GlassCard>
         </View>
       )}
     </View>
   );
 }
 
-function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.chip, on && styles.chipOn]}
-      accessibilityRole="switch"
-      accessibilityState={{ checked: on }}
-      accessibilityLabel={label}
-    >
-      <MaterialCommunityIcons name={on ? 'check-circle' : 'circle-outline'} size={16} color={on ? colors.onAmber : colors.muted} />
-      <Text style={[styles.chipText, on && { color: colors.onAmber }]}>{label}</Text>
-    </Pressable>
-  );
-}
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  mapWrap: { height: '38%', overflow: 'hidden' },
+const useStyles = makeStyles((p, t) => ({
+  screen: { flex: 1, backgroundColor: p.canvas },
+  mapWrap: { height: '36%', overflow: 'hidden' },
   topBar: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', gap: 10, alignItems: 'center' },
-  round: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(11,14,19,0.86)', alignItems: 'center', justifyContent: 'center' },
-  searchBox: { flex: 1, height: 44, borderRadius: 22, backgroundColor: 'rgba(11,14,19,0.92)', flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14 },
-  searchInput: { flex: 1, color: colors.text, fontSize: 16, fontWeight: '600' },
-  destPill: { flex: 1, height: 44, borderRadius: 22, backgroundColor: 'rgba(11,14,19,0.92)', flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16 },
-  destTo: { color: colors.muted, fontWeight: '600', fontSize: 13 },
-  destName: { flex: 1, color: colors.text, fontWeight: '700', fontSize: 16 },
-  flag: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.card, borderRadius: radius.md, padding: 14 },
-  rowTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
-  routeRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.card, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 14, borderWidth: 2, borderColor: 'transparent' },
-  routeRowOn: { borderColor: colors.amber, backgroundColor: '#1C1A14' },
-  routeTime: { width: 76, fontSize: 18, fontWeight: '800', color: colors.text, fontVariant: ['tabular-nums'] },
-  footer: { paddingHorizontal: 20, paddingTop: 8, gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },
-  recordRow: { flexDirection: 'row', alignItems: 'center' },
+  searchBox: { height: 44, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14 },
+  searchInput: { flex: 1, color: p.mint, fontSize: 16, fontWeight: '600' },
+  destPill: { height: 44, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16 },
+  destTo: { color: p.text3, fontWeight: '500', fontSize: 14 },
+  destName: { flex: 1, color: p.mint, fontWeight: '700', fontSize: 16 },
   chips: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 36, paddingHorizontal: 12, borderRadius: radius.pill, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
-  chipOn: { backgroundColor: colors.amber, borderColor: colors.amber },
-  chipText: { fontSize: 14, fontWeight: '700', color: colors.text },
-  shuffle: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 36, paddingHorizontal: 10 },
-  shuffleText: { fontSize: 14, fontWeight: '700', color: colors.text },
-  viaDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 2, borderColor: '#fff' },
-});
+  routeRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 14 },
+  timeCol: { width: 56, alignItems: 'flex-start' },
+  routeTime: { fontSize: 28, fontWeight: '700', letterSpacing: -1, fontVariant: ['tabular-nums'] },
+  sheet: { marginHorizontal: 0, paddingHorizontal: 16, paddingTop: 16, gap: 12, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
+  sheetTop: { gap: 4 },
+  recordRow: { flexDirection: 'row', alignItems: 'center' },
+}));

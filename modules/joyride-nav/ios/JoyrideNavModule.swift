@@ -165,7 +165,8 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     let navigationOptions = NavigationOptions(
       mapboxNavigation: navigation,
       voiceController: provider.routeVoiceController,
-      eventsManager: provider.eventsManager()
+      eventsManager: provider.eventsManager(),
+      styles: joyrideStyles()
     )
     let controller = NavigationViewController(navigationRoutes: routes, navigationOptions: navigationOptions)
     controller.modalPresentationStyle = .fullScreen

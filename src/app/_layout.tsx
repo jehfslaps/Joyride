@@ -5,20 +5,21 @@ import { Stack } from 'expo-router';
 import { useEffect } from 'react';
 import { syncDrivesToCarPlay } from '@/lib/storage';
 import { StatusBar } from 'expo-status-bar';
-import { colors } from '@/theme';
+import { useTheme } from '@/theme';
 
 export default function RootLayout() {
+  const p = useTheme();
   useEffect(() => {
     syncDrivesToCarPlay().catch(() => {});
   }, []);
 
   return (
     <>
-      <StatusBar style="light" />
+      <StatusBar style={p.dark ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: colors.bg },
+          contentStyle: { backgroundColor: p.canvas },
           animation: 'default',
         }}
       >

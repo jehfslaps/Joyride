@@ -1,18 +1,17 @@
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Speech from 'expo-speech';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import MapView, { Polyline } from 'react-native-maps';
+import { Alert, StyleSheet, Text, View } from 'react-native';
+import MapView from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BigButton } from '@/components/BigButton';
+import { GlassCard, GlowRoute, IconTile, LivePuck, PrimaryPill, RoundButton, useMapLook, Vignette } from '@/components/ui';
 import { ManeuverIcon } from '@/components/ManeuverIcon';
 import { formatDistance, formatMiles, indexAtDistance, type LngLat } from '@/lib/geo';
 import { NavSession, type JoinMode, type SessionView } from '@/lib/session';
 import { getCachedRoute } from '@/lib/storage';
-import { colors, radius, type } from '@/theme';
+import { makeStyles, typeFor, useTheme } from '@/theme';
 
 const toLatLng = (c: LngLat) => ({ latitude: c[1], longitude: c[0] });
 
@@ -20,6 +19,10 @@ export default function NavigateScreen() {
   useKeepAwake();
   const { id, mode } = useLocalSearchParams<{ id: string; mode: JoinMode }>();
   const insets = useSafeAreaInsets();
+  const p = useTheme();
+  const t = typeFor(p);
+  const s = useStyles();
+  const mapLook = useMapLook();
   const map = useRef<MapView>(null);
   const session = useRef<NavSession | null>(null);
   const mutedRef = useRef(false);
@@ -127,123 +130,105 @@ export default function NavigateScreen() {
   }
 
   return (
-    <View style={styles.screen}>
+    <View style={s.screen}>
       <MapView
         ref={map}
         style={StyleSheet.absoluteFill}
-        userInterfaceStyle="dark"
-        showsUserLocation
-        showsCompass={false}
-        showsPointsOfInterests={false}
-        showsBuildings
+        {...mapLook}
+        showsUserLocation={false}
         pitchEnabled
-        tintColor={colors.blue}
         onPanDrag={() => follow && setFollow(false)}
       >
-        {done.length > 1 && (
-          <Polyline coordinates={done.map(toLatLng)} strokeColor={colors.amberDim} strokeWidth={7} lineCap="round" lineJoin="round" />
-        )}
-        {ahead.length > 1 && (
-          <Polyline coordinates={ahead.map(toLatLng)} strokeColor={colors.amber} strokeWidth={8} lineCap="round" lineJoin="round" />
-        )}
-        {view?.detour && view.detour.length > 1 && (
-          <Polyline coordinates={view.detour.map(toLatLng)} strokeColor={colors.blue} strokeWidth={8} lineCap="round" lineJoin="round" lineDashPattern={[1, 12]} />
-        )}
-        {view?.beeline && here && (
-          <Polyline coordinates={[toLatLng(here), toLatLng(view.beeline)]} strokeColor={colors.blue} strokeWidth={4} lineDashPattern={[8, 10]} />
-        )}
+        {done.length > 1 && <GlowRoute coords={done} travelled />}
+        {ahead.length > 1 && <GlowRoute coords={ahead} z={3} />}
+        {view?.detour && view.detour.length > 1 && <GlowRoute coords={view.detour} dim z={2} />}
+        {view?.beeline && here && <GlowRoute coords={[here, view.beeline]} dim z={2} />}
+        {here && <LivePuck at={here} />}
       </MapView>
+      <Vignette edge="top" height={insets.top + 150} />
 
-      {/* Turn banner */}
-      <View style={[styles.banner, { top: insets.top + 8 }, onDetour && { backgroundColor: '#123058' }]}>
+      {/* Turn banner: high-opacity glass so it stays readable over any map. */}
+      <GlassCard strong style={[s.banner, { top: insets.top + 8 }]}>
         {finished ? (
-          <View style={styles.bannerRow}>
-            <MaterialCommunityIcons name="flag-checkered" size={44} color={colors.text} />
+          <View style={s.bannerRow}>
+            <IconTile icon="flag-checkered" size={56} glow />
             <View style={{ flex: 1 }}>
-              <Text style={styles.bannerDist}>Drive complete</Text>
-              <Text style={styles.bannerText}>Hope it was as good as the first time.</Text>
+              <Text style={s.bannerDist}>Arrived.</Text>
+              <Text style={s.bannerText}>Hope it was as good as the first time.</Text>
             </View>
           </View>
         ) : g?.next ? (
           <>
-            {onDetour && <Text style={styles.bannerTag}>{view?.phase === 'rejoin' ? 'BACK TO THE ROUTE' : 'GETTING TO THE ROUTE'}</Text>}
-            <View style={styles.bannerRow}>
-              <ManeuverIcon step={g.next} size={52} color={colors.text} />
+            {onDetour && <Text style={s.bannerTag}>{view?.phase === 'rejoin' ? 'BACK TO THE ROUTE' : 'GETTING TO THE ROUTE'}</Text>}
+            <View style={s.bannerRow}>
+              <View style={[s.turnTile, { backgroundColor: p.tile, shadowColor: p.glow }]}>
+                <ManeuverIcon step={g.next} size={40} color={p.glow} />
+              </View>
               <View style={{ flex: 1 }}>
-                <Text style={[styles.bannerDist, type.mono]}>{formatDistance(g.distToNextM)}</Text>
-                <Text style={styles.bannerText} numberOfLines={2}>{g.next.instruction}</Text>
+                <Text style={[s.bannerDist, t.mono]}>{formatDistance(g.distToNextM)}</Text>
+                <Text style={s.bannerText} numberOfLines={2}>{g.next.instruction}</Text>
               </View>
             </View>
             {g.then && (
-              <View style={styles.thenRow}>
-                <Text style={styles.thenText}>Then</Text>
-                <ManeuverIcon step={g.then} size={20} color={colors.text} />
+              <View style={s.thenRow}>
+                <Text style={s.thenText}>Then</Text>
+                <ManeuverIcon step={g.then} size={20} color={p.mint} />
               </View>
             )}
           </>
         ) : (
-          <View style={styles.bannerRow}>
-            <MaterialCommunityIcons name="navigation-variant" size={44} color={colors.text} />
-            <Text style={[styles.bannerText, { flex: 1 }]}>
+          <View style={s.bannerRow}>
+            <IconTile icon="navigation-variant-outline" size={56} glow />
+            <Text style={[s.bannerText, { flex: 1 }]}>
               {view?.beeline ? 'Head toward the route on the map' : 'Finding your position…'}
             </Text>
           </View>
         )}
-      </View>
+      </GlassCard>
 
-      {/* Bottom bar */}
-      <View style={[styles.bottom, { paddingBottom: insets.bottom + 12 }]}>
+      {/* Trip sheet */}
+      <GlassCard strong glow radiusSize={32} style={[s.bottom, { paddingBottom: insets.bottom + 12 }]}>
         {!follow && (
-          <Pressable style={styles.recenter} onPress={() => setFollow(true)}>
-            <MaterialCommunityIcons name="navigation-variant" size={18} color={colors.onAmber} />
-            <Text style={{ color: colors.onAmber, fontWeight: '700' }}>Re-center</Text>
-          </Pressable>
+          <View style={s.recenterWrap}>
+            <PrimaryPill label="Re-center" icon="navigation-variant-outline" onPress={() => setFollow(true)} compact />
+          </View>
         )}
         {finished ? (
-          <BigButton label="Back to my drives" icon="check" onPress={() => router.back()} />
+          <PrimaryPill label="Back to my drives" icon="check" onPress={() => router.back()} />
         ) : (
-          <View style={styles.bottomRow}>
-            <Pressable onPress={() => setMuted((m) => !m)} style={styles.iconBtn} hitSlop={6}>
-              <MaterialCommunityIcons name={muted ? 'volume-off' : 'volume-high'} size={24} color={colors.text} />
-            </Pressable>
+          <View style={s.bottomRow}>
+            <RoundButton icon={muted ? 'volume-off' : 'volume-high'} onPress={() => setMuted((m) => !m)} label={muted ? 'Unmute' : 'Mute'} />
             <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={[styles.remain, type.mono]}>{view ? formatMiles(view.mainRemainingM) : '—'}</Text>
-              <Text style={type.small}>
-                {view ? `left of the drive · ${Math.round(speedMps * 2.23694)} mph` : 'getting ready'}
-              </Text>
+              <Text style={[s.remain, t.mono]}>{view ? formatMiles(view.mainRemainingM) : '—'}</Text>
+              <Text style={t.caption}>{view ? `left of the drive · ${Math.round(speedMps * 2.23694)} mph` : 'getting ready'}</Text>
             </View>
-            <Pressable onPress={onEnd} style={[styles.iconBtn, { backgroundColor: colors.red }]} hitSlop={6}>
-              <MaterialCommunityIcons name="close" size={24} color={colors.text} />
-            </Pressable>
+            <PrimaryPill label="End" tone="hazard" onPress={onEnd} compact />
           </View>
         )}
         {view && view.mainTotalM > 0 && !finished && (
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${Math.min(100, (view.mainProgressM / view.mainTotalM) * 100)}%` }]} />
+          <View style={[s.progressTrack, { backgroundColor: p.hairline }]}>
+            <View style={[s.progressFill, { backgroundColor: p.brand, width: `${Math.min(100, (view.mainProgressM / view.mainTotalM) * 100)}%` }]} />
           </View>
         )}
-      </View>
+      </GlassCard>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  banner: {
-    position: 'absolute', left: 12, right: 12, backgroundColor: '#13261C', borderRadius: radius.lg, padding: 16, gap: 8,
-    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 16, shadowOffset: { width: 0, height: 6 },
-  },
-  bannerTag: { color: colors.blue, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+const useStyles = makeStyles((p) => ({
+  screen: { flex: 1, backgroundColor: p.canvas },
+  banner: { position: 'absolute', left: 12, right: 12, padding: 16, gap: 8 },
+  bannerTag: { color: p.caution, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
   bannerRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  bannerDist: { fontSize: 30, fontWeight: '800', color: colors.text, letterSpacing: -0.5 },
-  bannerText: { fontSize: 19, fontWeight: '600', color: colors.text },
-  thenRow: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 4 },
-  thenText: { color: colors.text, fontWeight: '700' },
-  bottom: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.bg, paddingTop: 14, paddingHorizontal: 16, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, gap: 12 },
+  turnTile: { width: 60, height: 60, borderRadius: 14, alignItems: 'center', justifyContent: 'center', shadowOpacity: p.dark ? 0.45 : 0, shadowRadius: 16, shadowOffset: { width: 0, height: 0 } },
+  bannerDist: { fontSize: 32, fontWeight: '700', color: p.mint, letterSpacing: -0.5 },
+  bannerText: { fontSize: 20, fontWeight: '600', color: p.mint },
+  thenRow: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', backgroundColor: p.tile, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
+  thenText: { color: p.mint, fontWeight: '700' },
+  bottom: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: 14, paddingHorizontal: 16, gap: 12, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
   bottomRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  iconBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.cardHi, alignItems: 'center', justifyContent: 'center' },
-  remain: { fontSize: 26, fontWeight: '800', color: colors.text },
-  recenter: { position: 'absolute', top: -56, alignSelf: 'center', flexDirection: 'row', gap: 6, alignItems: 'center', backgroundColor: colors.amber, borderRadius: radius.pill, paddingHorizontal: 16, paddingVertical: 10 },
-  progressTrack: { height: 4, borderRadius: 2, backgroundColor: colors.line, overflow: 'hidden' },
-  progressFill: { height: 4, backgroundColor: colors.amber },
-});
+  remain: { fontSize: 28, fontWeight: '700', color: p.mint },
+  recenterWrap: { position: 'absolute', top: -60, alignSelf: 'center' },
+  progressTrack: { height: 4, borderRadius: 2, overflow: 'hidden' },
+  progressFill: { height: 4 },
+}));

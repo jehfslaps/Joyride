@@ -178,3 +178,10 @@ export function formatDuration(ms: number): string {
   if (h === 0) return `${m} min`;
   return m === 0 ? `${h} hr` : `${h} hr ${m} min`;
 }
+
+/** A duration split for a big number: "34" + "min", or "1:05" + "hr". */
+export function heroDuration(ms: number): { value: string; unit: string } {
+  const totalMin = Math.max(1, Math.round(ms / 60000));
+  if (totalMin < 60) return { value: String(totalMin), unit: 'min' };
+  return { value: `${Math.floor(totalMin / 60)}:${String(totalMin % 60).padStart(2, '0')}`, unit: 'hr' };
+}

@@ -5,11 +5,25 @@ import * as Location from 'expo-location';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Pressable, Settings, StyleSheet, Text, View } from 'react-native';
-import MapView, { Polyline } from 'react-native-maps';
+import MapView from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEMO, demoReady } from '@/lib/demo';
-import { BigButton } from '@/components/BigButton';
+import {
+  ContextChip,
+  GlassCard,
+  GlowRoute,
+  HeroNumber,
+  IconTile,
+  Label,
+  LivePuck,
+  PrimaryPill,
+  RoundButton,
+  TwoTone,
+  useMapLook,
+  Vignette,
+} from '@/components/ui';
+import { useHere } from '@/lib/useHere';
 import { formatDuration, formatMiles, lineLength, type LngLat } from '@/lib/geo';
 import {
   discardRecording,
@@ -20,10 +34,15 @@ import {
   type RecorderState,
 } from '@/lib/recorder';
 import { driveSubtitle, driveTitle, listDrives, type DriveSummary, type TrackPoint } from '@/lib/storage';
-import { colors, radius, type } from '@/theme';
+import { makeStyles, typeFor, useTheme } from '@/theme';
 
 export default function Home() {
   const insets = useSafeAreaInsets();
+  const p = useTheme();
+  const t = typeFor(p);
+  const s = useStyles();
+  const mapLook = useMapLook();
+  const here = useHere();
   const map = useRef<MapView>(null);
   const [state, setState] = useState<RecorderState>('idle');
   const [points, setPoints] = useState<TrackPoint[]>([]);
@@ -164,116 +183,109 @@ export default function Home() {
   }
 
   const recording = state === 'recording';
+  const totalM = drives.reduce((a, d) => a + d.distanceM, 0);
+  const startedAt = points[0] ? new Date(points[0][2]).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
 
   return (
-    <View style={styles.screen}>
-      <View style={[styles.mapWrap, { height: recording ? '62%' : '42%' }]}>
-        <MapView
-          ref={map}
-          style={StyleSheet.absoluteFill}
-          showsUserLocation
-          followsUserLocation={recording}
-          userInterfaceStyle="dark"
-          showsPointsOfInterests={false}
-          showsCompass={false}
-          tintColor={colors.amber}
-        >
-          {coords.length > 1 && (
-            <Polyline coordinates={coords} strokeColor={colors.amber} strokeWidth={6} lineCap="round" lineJoin="round" />
-          )}
+    <View style={s.screen}>
+      <View style={[s.mapWrap, { height: recording ? '58%' : '40%' }]}>
+        <MapView ref={map} style={StyleSheet.absoluteFill} showsUserLocation={false} {...mapLook}>
+          {coords.length > 1 && <GlowRoute coords={points.map((pt) => [pt[0], pt[1]] as LngLat)} />}
+          {here && <LivePuck at={here} />}
         </MapView>
-        <View style={[styles.mapTop, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
-          <Text style={styles.brand} pointerEvents="none">Joyride</Text>
+        <Vignette edge="top" height={insets.top + 110} />
+        <Vignette edge="bottom" height={90} />
+        <View style={[s.mapTop, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+          <Text style={s.brand} pointerEvents="none">
+            <Text style={{ color: p.text3, fontWeight: '400' }}>joy</Text>ride
+          </Text>
           {recording ? (
-            <View style={styles.recPill} pointerEvents="none">
-              <View style={styles.recDot} />
-              <Text style={styles.recPillText}>RECORDING</Text>
-            </View>
+            <GlassCard radiusSize={18} style={s.recPill}>
+              <View style={[s.recDot, { backgroundColor: p.glow, shadowColor: p.glow }]} />
+              <Text style={s.recPillText}>Recording</Text>
+            </GlassCard>
           ) : (
-            <Pressable onPress={() => router.push('/settings')} hitSlop={10} style={styles.gear} accessibilityLabel="Settings">
-              <MaterialCommunityIcons name="cog-outline" size={22} color={colors.text} />
-            </Pressable>
+            <RoundButton icon="cog-outline" onPress={() => router.push('/settings')} label="Settings" />
           )}
         </View>
-        <View style={styles.mapFade} pointerEvents="none" />
       </View>
 
       {recording ? (
-        <View style={[styles.panel, { paddingBottom: insets.bottom + 16 }]}>
-          <Text style={type.label}>THIS DRIVE</Text>
-          <Text style={[styles.timer, type.mono]}>{clock(elapsed)}</Text>
-          <View style={styles.statsRow}>
-            <Stat label="Distance" value={formatMiles(miles)} />
-            <Stat label="Started" value={points[0] ? new Date(points[0][2]).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '—'} />
+        <View style={[s.panel, { paddingBottom: insets.bottom + 16 }]}>
+          <HeroNumber value={clock(elapsed)} size={72} caption={<TwoTone lead="This drive ·" value={`started ${startedAt}`} size="body" />} />
+          <View style={s.chipsRow}>
+            <ContextChip prefix="Distance" label={formatMiles(miles)} />
           </View>
+          <Text style={[t.caption, { marginTop: 4 }]}>Lock the phone or switch apps. It keeps recording.</Text>
           <View style={{ flex: 1 }} />
-          <BigButton label="Stop & save" icon="stop-circle" tone="red" onPress={onStop} busy={busy} />
+          <PrimaryPill label="Stop and save" icon="stop-circle-outline" tone="hazard" onPress={onStop} busy={busy} />
         </View>
       ) : (
         <FlatList
-          style={styles.list}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 24 }}
+          style={s.list}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 24 }}
           data={drives}
           keyExtractor={(d) => d.id}
           ListHeaderComponent={
-            <View style={{ gap: 18, paddingTop: 4, paddingBottom: 12 }}>
+            <View style={{ gap: 14, paddingBottom: 12 }}>
               {state === 'interrupted' && (
-                <View style={styles.notice}>
-                  <MaterialCommunityIcons name="alert-circle-outline" size={22} color={colors.amber} />
-                  <Text style={[type.body, { flex: 1 }]}>A drive was still recording when Joyride closed.</Text>
+                <GlassCard style={s.notice}>
+                  <MaterialCommunityIcons name="alert-circle-outline" size={22} color={p.caution} />
+                  <Text style={[t.body, { flex: 1 }]}>A drive was still recording when Joyride closed.</Text>
                   <Pressable onPress={finish} hitSlop={10}>
-                    <Text style={styles.noticeAction}>Save</Text>
+                    <Text style={[s.noticeAction, { color: p.mint }]}>Save</Text>
                   </Pressable>
                   <Pressable onPress={async () => { await discardRecording(); refresh(); }} hitSlop={10}>
-                    <Text style={[styles.noticeAction, { color: colors.muted }]}>Discard</Text>
+                    <Text style={[s.noticeAction, { color: p.text2 }]}>Discard</Text>
                   </Pressable>
-                </View>
+                </GlassCard>
               )}
-              <BigButton label="Start a drive" icon="record-circle" onPress={onStart} busy={busy} />
+              {drives.length > 0 ? (
+                <HeroNumber
+                  value={(totalM / 1609.344).toFixed(totalM < 16093 ? 1 : 0)}
+                  unit="mi"
+                  caption={<TwoTone lead="Recorded so far ·" value={`${drives.length} drive${drives.length === 1 ? '' : 's'}`} size="body" />}
+                />
+              ) : (
+                <TwoTone lead="Ready when" value="you are." />
+              )}
+              <PrimaryPill label="Start a drive" icon="record-circle-outline" onPress={onStart} busy={busy} />
               <View style={{ flexDirection: 'row', gap: 10 }}>
-                <BigButton label="Fun routes" icon="routes" tone="ghost" onPress={() => router.push('/routes')} style={{ flex: 1 }} />
-                <BigButton label="Surprise me" icon="dice-5" tone="ghost" onPress={() => router.push('/surprise')} style={{ flex: 1 }} />
+                <PrimaryPill label="Fun routes" icon="routes" tone="glass" onPress={() => router.push('/routes')} style={{ flex: 1 }} compact />
+                <PrimaryPill label="Surprise me" icon="dice-5-outline" tone="glass" onPress={() => router.push('/surprise')} style={{ flex: 1 }} compact />
               </View>
-              <Text style={[type.label, { marginTop: 8 }]}>YOUR DRIVES</Text>
+              {drives.length > 0 && <Label style={{ marginTop: 10 }}>YOUR DRIVES</Label>}
             </View>
           }
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <MaterialCommunityIcons name="map-marker-path" size={40} color={colors.faint} />
-              <Text style={[type.body, { color: colors.muted, textAlign: 'center' }]}>
+            <GlassCard style={s.empty}>
+              <IconTile icon="map-marker-path" size={48} />
+              <Text style={[t.body, { color: p.text2, textAlign: 'center' }]}>
                 No drives yet. Tap Start, go wherever the road takes you, and tap Stop when you’re home.
               </Text>
-            </View>
+            </GlassCard>
           }
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           renderItem={({ item }) => (
             <Pressable
               onPress={() => router.push({ pathname: '/drive/[id]', params: { id: item.id } })}
-              style={({ pressed }) => [styles.card, pressed && { backgroundColor: colors.cardHi }]}
+              style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1, transform: [{ scale: pressed ? 0.99 : 1 }] })}
+              accessibilityRole="button"
             >
-              <View style={styles.cardIcon}>
-                <MaterialCommunityIcons name="map-marker-path" size={22} color={colors.amber} />
-              </View>
-              <View style={{ flex: 1, gap: 3 }}>
-                <Text style={styles.cardTitle} numberOfLines={1}>{driveTitle(item)}</Text>
-                <Text style={type.small}>
-                  {driveSubtitle(item)} · {formatMiles(item.distanceM)} · {formatDuration(item.endedAt - item.startedAt)}
-                </Text>
-              </View>
-              <MaterialCommunityIcons name="chevron-right" size={22} color={colors.faint} />
+              <GlassCard style={s.card}>
+                <IconTile icon="map-marker-path" size={42} />
+                <View style={{ flex: 1, gap: 3 }}>
+                  <Text style={t.bodyStrong} numberOfLines={1}>{driveTitle(item)}</Text>
+                  <Text style={t.caption}>
+                    {driveSubtitle(item)} · {formatMiles(item.distanceM)} · {formatDuration(item.endedAt - item.startedAt)}
+                  </Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={22} color={p.text3} />
+              </GlassCard>
             </Pressable>
           )}
         />
       )}
-    </View>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.stat}>
-      <Text style={type.small}>{label}</Text>
-      <Text style={[styles.statValue, type.mono]}>{value}</Text>
     </View>
   );
 }
@@ -288,26 +300,19 @@ function clock(ms: number) {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+const useStyles = makeStyles((p, t) => ({
+  screen: { flex: 1, backgroundColor: p.canvas },
   mapWrap: { width: '100%', overflow: 'hidden' },
-  gear: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(11,14,19,0.82)', alignItems: 'center', justifyContent: 'center' },
-  mapTop: { position: 'absolute', left: 20, right: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  brand: { ...type.hero, textShadowColor: 'rgba(0,0,0,0.6)', textShadowRadius: 12 },
-  recPill: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.redDim, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: colors.red },
-  recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.red },
-  recPillText: { color: colors.text, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
-  mapFade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 24, backgroundColor: colors.bg, opacity: 0.35 },
-  panel: { flex: 1, paddingHorizontal: 20, paddingTop: 20, gap: 6 },
-  timer: { fontSize: 64, fontWeight: '800', color: colors.text, letterSpacing: -2 },
-  statsRow: { flexDirection: 'row', gap: 12, marginTop: 6 },
-  stat: { flex: 1, backgroundColor: colors.card, borderRadius: radius.md, padding: 14, gap: 4 },
-  statValue: { fontSize: 22, fontWeight: '700', color: colors.text },
-  list: { flex: 1, marginTop: 16 },
-  card: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: colors.card, borderRadius: radius.md, padding: 16 },
-  cardIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,178,63,0.12)', alignItems: 'center', justifyContent: 'center' },
-  cardTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
-  empty: { alignItems: 'center', gap: 12, paddingVertical: 32, paddingHorizontal: 12 },
-  notice: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.card, borderRadius: radius.md, padding: 14, borderWidth: 1, borderColor: colors.amberDim },
-  noticeAction: { color: colors.amber, fontWeight: '700', fontSize: 15 },
-});
+  mapTop: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  brand: { ...t.display, fontWeight: '700' },
+  recPill: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, height: 36 },
+  recDot: { width: 9, height: 9, borderRadius: 5, shadowOpacity: 0.9, shadowRadius: 8, shadowOffset: { width: 0, height: 0 } },
+  recPillText: { color: p.mint, fontSize: 14, fontWeight: '700' },
+  panel: { flex: 1, paddingHorizontal: 16, paddingTop: 12, gap: 10 },
+  chipsRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  list: { flex: 1, marginTop: 4 },
+  card: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 14 },
+  empty: { alignItems: 'center', gap: 12, paddingVertical: 28, paddingHorizontal: 18 },
+  notice: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
+  noticeAction: { fontWeight: '700', fontSize: 15 },
+}));

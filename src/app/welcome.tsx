@@ -2,10 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import type { ComponentProps } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BigButton } from '@/components/BigButton';
-import { colors, radius, type } from '@/theme';
+import { GlassCard, IconTile, PrimaryPill, TwoTone } from '@/components/ui';
+import { makeStyles, typeFor, useTheme } from '@/theme';
 
 export const WELCOME_KEY = 'joyride:welcomed:v1';
 
@@ -13,7 +13,7 @@ type Icon = ComponentProps<typeof MaterialCommunityIcons>['name'];
 
 const POINTS: { icon: Icon; title: string; body: string }[] = [
   {
-    icon: 'record-circle',
+    icon: 'record-circle-outline',
     title: 'Record any drive',
     body: 'Tap Start, drive wherever you like, and tap Stop. Joyride saves every street and turn.',
   },
@@ -25,10 +25,10 @@ const POINTS: { icon: Icon; title: string; body: string }[] = [
   {
     icon: 'routes',
     title: 'Fun routes',
-    body: 'Scenic, neighborhood, landmark and backroad routes to anywhere, fastest to longest.',
+    body: 'Routes that weave through neighborhoods, side streets and cul-de-sacs on the way to anywhere, fastest to longest.',
   },
   {
-    icon: 'dice-5',
+    icon: 'dice-5-outline',
     title: 'Surprise me',
     body: 'Set a distance or an area, and Joyride picks somewhere random to go.',
   },
@@ -36,6 +36,9 @@ const POINTS: { icon: Icon; title: string; body: string }[] = [
 
 export default function Welcome() {
   const insets = useSafeAreaInsets();
+  const p = useTheme();
+  const t = typeFor(p);
+  const s = useStyles();
 
   async function done() {
     await AsyncStorage.setItem(WELCOME_KEY, '1').catch(() => {});
@@ -43,54 +46,51 @@ export default function Welcome() {
   }
 
   return (
-    <View style={styles.screen}>
-      <ScrollView contentContainerStyle={{ padding: 24, paddingTop: insets.top + 32, gap: 22, paddingBottom: 24 }}>
-        <View style={{ gap: 6 }}>
-          <Text style={type.hero}>Joyride</Text>
-          <Text style={[type.body, { color: colors.muted }]}>For drives where the drive is the point.</Text>
+    <View style={s.screen}>
+      <ScrollView contentContainerStyle={{ padding: 20, paddingTop: insets.top + 32, gap: 22, paddingBottom: 24 }}>
+        <View style={{ gap: 10 }}>
+          <Text style={[t.hero, { fontSize: 56 }]}>
+            <Text style={{ color: p.text3, fontWeight: '400' }}>joy</Text>ride
+          </Text>
+          <TwoTone lead="For drives where" value="the drive is the point." size="title" />
         </View>
 
-        {POINTS.map((p) => (
-          <View key={p.title} style={styles.point}>
-            <View style={styles.icon}>
-              <MaterialCommunityIcons name={p.icon} size={24} color={colors.amber} />
-            </View>
+        {POINTS.map((pt) => (
+          <View key={pt.title} style={s.point}>
+            <IconTile icon={pt.icon} size={44} />
             <View style={{ flex: 1, gap: 3 }}>
-              <Text style={styles.title}>{p.title}</Text>
-              <Text style={[type.small, { fontSize: 14, lineHeight: 20 }]}>{p.body}</Text>
+              <Text style={t.bodyStrong}>{pt.title}</Text>
+              <Text style={[t.caption, { fontSize: 14, lineHeight: 20 }]}>{pt.body}</Text>
             </View>
           </View>
         ))}
 
-        <View style={styles.note}>
-          <Text style={styles.noteTitle}>About your location</Text>
-          <Text style={styles.noteBody}>
+        <GlassCard style={s.note}>
+          <Text style={t.bodyStrong}>About your location</Text>
+          <Text style={s.noteBody}>
             To record a drive with your phone locked, Joyride asks for location access “Always”. It only records while
             you’ve tapped Start, and your drives stay on this phone.
           </Text>
-        </View>
+        </GlassCard>
 
-        <View style={styles.note}>
-          <Text style={styles.noteTitle}>Drive safely</Text>
-          <Text style={styles.noteBody}>
+        <GlassCard style={s.note}>
+          <Text style={t.bodyStrong}>Drive safely</Text>
+          <Text style={s.noteBody}>
             Keep your eyes on the road and set things up before you go. Directions can be wrong: always follow road
             signs and traffic laws, and never use the app in a way that distracts you.
           </Text>
-        </View>
+        </GlassCard>
       </ScrollView>
-      <View style={{ paddingHorizontal: 24, paddingBottom: insets.bottom + 16, paddingTop: 8 }}>
-        <BigButton label="Let’s go" icon="arrow-right" onPress={done} />
+      <View style={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 16, paddingTop: 8 }}>
+        <PrimaryPill label="Let’s go" trailingIcon="chevron-right" onPress={done} />
       </View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+const useStyles = makeStyles((p) => ({
+  screen: { flex: 1, backgroundColor: p.canvas },
   point: { flexDirection: 'row', gap: 14, alignItems: 'flex-start' },
-  icon: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,178,63,0.12)', alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 17, fontWeight: '700', color: colors.text },
-  note: { backgroundColor: colors.card, borderRadius: radius.md, padding: 16, gap: 6 },
-  noteTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
-  noteBody: { fontSize: 14, lineHeight: 20, color: colors.muted },
-});
+  note: { padding: 16, gap: 6 },
+  noteBody: { fontSize: 14, lineHeight: 20, color: p.text2 },
+}));

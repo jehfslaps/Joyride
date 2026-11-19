@@ -43,7 +43,7 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
 
   func connect(scene: CPTemplateApplicationScene, interfaceController: CPInterfaceController, window: CPWindow) {
     let provider = JoyrideNavigator.shared.sharedProvider()
-    let manager = self.manager ?? CarPlayManager(navigationProvider: provider)
+    let manager = self.manager ?? CarPlayManager(navigationProvider: provider, styles: joyrideStyles())
     // Browsing the map shouldn't count as a navigation session (Mapbox bills those).
     manager.startFreeDriveAutomatically = false
     manager.delegate = self
@@ -110,7 +110,7 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
 
   nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, guidanceBackgroundColorFor style: UIUserInterfaceStyle) -> UIColor? {
     // Joyride's dark night-drive look.
-    UIColor(red: 0.075, green: 0.149, blue: 0.11, alpha: 1)
+    UIColor(hex: 0x0B1A12)
   }
 
   nonisolated func carPlayManagerWillCancelPreview(

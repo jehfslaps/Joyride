@@ -1,14 +1,14 @@
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BigButton } from '@/components/BigButton';
+import { ContextChip, GlassRow, GlowRoute, HeroNumber, Label, LivePuck, PinTile, PrimaryPill, RoundButton, TwoTone, useMapLook, Vignette } from '@/components/ui';
+import { useHere } from '@/lib/useHere';
 import { JoyrideNav } from '../../../modules/joyride-nav';
 import { DEMO } from '@/lib/demo';
-import { distance, formatDuration, formatMiles, type LngLat } from '@/lib/geo';
+import { distance, formatMiles, heroDuration, type LngLat } from '@/lib/geo';
 import { Guidance } from '@/lib/guidance';
 import { buildRouteFromDrive, hasMapbox, MapboxError } from '@/lib/mapbox';
 import type { NavRoute } from '@/lib/route';
@@ -24,13 +24,18 @@ import {
   type DriveSummary,
   type TrackPoint,
 } from '@/lib/storage';
-import { colors, radius, type } from '@/theme';
+import { makeStyles, typeFor, useTheme } from '@/theme';
 
 type Choice = { startAwayM: number; nearestAwayM: number; nearestPct: number };
 
 export default function DriveScreen() {
   const { id, go: autoGo } = useLocalSearchParams<{ id: string; go?: string }>();
   const insets = useSafeAreaInsets();
+  const p = useTheme();
+  const t = typeFor(p);
+  const s = useStyles();
+  const mapLook = useMapLook();
+  const here = useHere();
   const map = useRef<MapView>(null);
   const [drive, setDrive] = useState<DriveSummary | null>(null);
   const [points, setPoints] = useState<TrackPoint[]>([]);
@@ -167,82 +172,70 @@ export default function DriveScreen() {
     ]);
   }
 
-  if (!drive) return <View style={styles.screen} />;
+  if (!drive) return <View style={s.screen} />;
 
   return (
-    <View style={styles.screen}>
-      <View style={styles.mapWrap}>
-        <MapView
-          ref={map}
-          style={StyleSheet.absoluteFill}
-          userInterfaceStyle="dark"
-          showsUserLocation
-          showsPointsOfInterests={false}
-          onMapReady={fit}
-        >
+    <View style={s.screen}>
+      <View style={s.mapWrap}>
+        <MapView ref={map} style={StyleSheet.absoluteFill} showsUserLocation={false} onMapReady={fit} {...mapLook}>
           {coords.length > 1 && (
             <>
-              <Polyline coordinates={coords} strokeColor={colors.amber} strokeWidth={5} lineCap="round" lineJoin="round" />
-              <Marker coordinate={coords[0]} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
-                <View style={[styles.dot, { backgroundColor: colors.green }]} />
-              </Marker>
-              <Marker coordinate={coords[coords.length - 1]} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
-                <View style={styles.flag}>
-                  <MaterialCommunityIcons name="flag-checkered" size={16} color={colors.bg} />
-                </View>
-              </Marker>
+              <GlowRoute coords={points.map((pt) => [pt[0], pt[1]] as LngLat)} />
+              <PinTile at={[points[0][0], points[0][1]]} icon="circle-double" tone="start" />
+              <PinTile at={[points[points.length - 1][0], points[points.length - 1][1]]} icon="flag-checkered" />
             </>
           )}
+          {here && <LivePuck at={here} />}
         </MapView>
-        <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
-          <RoundButton icon="chevron-left" onPress={() => router.back()} />
+        <Vignette edge="top" height={insets.top + 90} />
+        <Vignette edge="bottom" height={70} />
+        <View style={[s.topBar, { paddingTop: insets.top + 6 }]}>
+          <RoundButton icon="chevron-left" onPress={() => router.back()} label="Back" />
           <View style={{ flex: 1 }} />
-          <RoundButton icon="pencil-outline" onPress={onRename} />
-          <RoundButton icon="delete-outline" onPress={onDelete} />
+          <RoundButton icon="pencil-outline" onPress={onRename} label="Rename" />
+          <RoundButton icon="delete-outline" onPress={onDelete} label="Delete" tone="hazard" />
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 20, gap: 16, paddingBottom: insets.bottom + 24 }}>
-        <View style={{ gap: 4 }}>
-          <Text style={type.title}>{driveTitle(drive)}</Text>
-          <Text style={type.small}>{driveSubtitle(drive)}</Text>
-        </View>
-
-        <View style={styles.statsRow}>
-          <Stat label="Distance" value={formatMiles(drive.distanceM)} />
-          <Stat label="Time" value={formatDuration(drive.endedAt - drive.startedAt)} />
+      <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: insets.bottom + 24 }}>
+        <HeroNumber {...heroDuration(drive.endedAt - drive.startedAt)} caption={<TwoTone lead="Recorded" value={driveSubtitle(drive)} size="body" />} />
+        <Text style={t.title} numberOfLines={2}>{driveTitle(drive)}</Text>
+        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+          <ContextChip prefix="Distance" label={formatMiles(drive.distanceM)} />
+          <ContextChip prefix="Turns" label="every one" />
         </View>
 
         {choice ? (
           <View style={{ gap: 10 }}>
-            <Text style={type.label}>WHERE DO YOU WANT TO PICK IT UP?</Text>
-            <ChoiceCard
+            <Label>WHERE DO YOU WANT TO PICK IT UP?</Label>
+            <GlassRow
               icon="home-outline"
               title="From the beginning"
               detail={`The start is ${formatMiles(choice.startAwayM)} away. You'll drive the whole thing.`}
               onPress={() => go('start')}
             />
-            <ChoiceCard
+            <GlassRow
               icon="crosshairs-gps"
               title="Nearest point"
               detail={`${formatMiles(choice.nearestAwayM)} away, about ${choice.nearestPct}% of the way into the drive.`}
               onPress={() => go('nearest')}
             />
             <Pressable onPress={() => setChoice(null)} style={{ alignSelf: 'center', padding: 8 }}>
-              <Text style={[type.body, { color: colors.muted }]}>Cancel</Text>
+              <Text style={[t.body, { color: p.text2 }]}>Cancel</Text>
             </Pressable>
           </View>
         ) : (
-          <BigButton
+          <PrimaryPill
             label={preparing != null ? preparingLabel(preparing) : 'Relive this drive'}
             icon="steering"
+            trailingIcon="chevron-right"
             onPress={onRelive}
             busy={preparing != null}
           />
         )}
 
         {!hasMapbox() && (
-          <Text style={[type.small, { textAlign: 'center' }]}>
+          <Text style={[t.caption, { textAlign: 'center' }]}>
             Directions will show turns but no street names until a Mapbox token is added.
           </Text>
         )}
@@ -255,45 +248,8 @@ function preparingLabel(f: number) {
   return f > 0 && f < 1 ? `Matching roads… ${Math.round(f * 100)}%` : 'Preparing directions…';
 }
 
-function RoundButton({ icon, onPress }: { icon: 'chevron-left' | 'pencil-outline' | 'delete-outline'; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} hitSlop={8} style={({ pressed }) => [styles.round, pressed && { opacity: 0.7 }]}>
-      <MaterialCommunityIcons name={icon} size={icon === 'chevron-left' ? 28 : 20} color={colors.text} />
-    </Pressable>
-  );
-}
-
-function ChoiceCard({ icon, title, detail, onPress }: { icon: 'home-outline' | 'crosshairs-gps'; title: string; detail: string; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.choice, pressed && { backgroundColor: colors.cardHi }]}>
-      <MaterialCommunityIcons name={icon} size={26} color={colors.amber} />
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text }}>{title}</Text>
-        <Text style={type.small}>{detail}</Text>
-      </View>
-      <MaterialCommunityIcons name="chevron-right" size={22} color={colors.faint} />
-    </Pressable>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.stat}>
-      <Text style={type.small}>{label}</Text>
-      <Text style={[styles.statValue, type.mono]}>{value}</Text>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  mapWrap: { height: '50%', overflow: 'hidden' },
+const useStyles = makeStyles((p) => ({
+  screen: { flex: 1, backgroundColor: p.canvas },
+  mapWrap: { height: '48%', overflow: 'hidden' },
   topBar: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', gap: 10 },
-  round: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(11,14,19,0.82)', alignItems: 'center', justifyContent: 'center' },
-  dot: { width: 16, height: 16, borderRadius: 8, borderWidth: 3, borderColor: '#fff' },
-  flag: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
-  statsRow: { flexDirection: 'row', gap: 12 },
-  stat: { flex: 1, backgroundColor: colors.card, borderRadius: radius.md, padding: 14, gap: 4 },
-  statValue: { fontSize: 22, fontWeight: '700', color: colors.text },
-  choice: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: colors.card, borderRadius: radius.md, padding: 16 },
-});
+}));
