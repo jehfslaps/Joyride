@@ -260,7 +260,7 @@ export const LEVELS: Level[] = [
   { amplitude: 1000, wavelength: 4200, spacing: 800, maxStraight: 900, culPer10km: 1.5, minCul: 1, maxCul: 4, maxSpots: 45, odds: 1, budget: 2.8, title: 'Side-street wander' },
   { amplitude: 1200, wavelength: 3600, spacing: 550, maxStraight: 650, culPer10km: 2.5, minCul: 2, maxCul: 6, maxSpots: 70, odds: 2, budget: 3.8, title: 'Neighborhood zigzag' },
   { amplitude: 1400, wavelength: 3000, spacing: 400, maxStraight: 500, culPer10km: 4, minCul: 2, maxCul: 9, maxSpots: 100, odds: 2, budget: 5, title: 'Deep zigzag' },
-  { amplitude: 1600, wavelength: 2600, spacing: 280, maxStraight: 400, culPer10km: 6, minCul: 3, maxCul: 12, maxSpots: 140, odds: 3, budget: 0, title: 'Every nook' },
+  { amplitude: 1600, wavelength: 2600, spacing: 280, maxStraight: 400, culPer10km: 6, minCul: 3, maxCul: 12, maxSpots: 140, odds: 3, budget: 7, title: 'Every nook' },
 ];
 
 /** Spots closer than this to the quick way just touch the corner of a side street. */
@@ -556,6 +556,36 @@ export function stubSpots(coords: LngLat[], via: Via[]): Set<number> {
   return out;
 }
 
+/**
+ * Swaps each stub spot (one the route only pokes into and backs out of) for
+ * a nearby through-street on the same side, so the route keeps weaving
+ * without turning around mid-street.
+ */
+export function swapStubs(spots: Candidate[], stubs: Set<number>, candidates: Candidate[], rand: () => number): Candidate[] {
+  const used = new Set(spots);
+  const tried = new Set<Candidate>();
+  return spots.map((sp, i) => {
+    if (!stubs.has(i)) return sp;
+    tried.add(sp);
+    let best: Candidate | null = null;
+    let bestScore = Infinity;
+    for (const c of candidates) {
+      if (c.kind !== 'street' && c.kind !== 'main') continue;
+      if (used.has(c) || tried.has(c) || Math.sign(c.side) !== Math.sign(sp.side) || c.name === sp.name) continue;
+      const d = distance(c.coord, sp.coord);
+      if (d < 60 || d > 450) continue;
+      const score = d + Math.abs(Math.abs(c.side) - Math.abs(sp.side)) * 0.5 - (c.isNew ? 80 : 0) + rand() * 60;
+      if (score < bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+    if (!best) return sp;
+    used.add(best);
+    return best;
+  });
+}
+
 export function highwayMeters(steps: Step[]): number {
   return steps.filter(isHighwayStep).reduce((a, s) => a + s.distance, 0);
 }
@@ -687,15 +717,16 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
         if (!spots.length) return null;
         let r = await routeThrough([origin, ...spots.map((s) => s.coord), dest], rules).catch(() => null);
         if (!r) return null;
-        // Drop spots the route only poked into and backed out of, and route again.
-        const stubs = stubSpots(r.coords, spots);
-        if (stubs.size) {
-          const kept = spots.filter((_, i) => !stubs.has(i));
-          const again = kept.length ? await routeThrough([origin, ...kept.map((s) => s.coord), dest], rules).catch(() => null) : null;
-          if (again) {
-            spots = kept;
-            r = again;
-          }
+        // Spots the route only poked into and backed out of: swap them for a
+        // nearby through-street (twice at most), keeping the weave.
+        for (let pass = 0; pass < 2; pass++) {
+          const stubs = stubSpots(r.coords, spots);
+          if (!stubs.size) break;
+          const swapped = swapStubs(spots, stubs, candidates, rand);
+          const again = await routeThrough([origin, ...swapped.map((sp) => sp.coord), dest], rules).catch(() => null);
+          if (!again) break;
+          spots = swapped;
+          r = again;
         }
         // No long straight shots: wherever the route runs too far without a
         // turn, add the nearest side street there and route again (twice at most).
@@ -739,9 +770,18 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
           spots = fewer;
           r = again;
         }
-        // Last tidy-up: spots added along the way that only poke in and back out.
+        // Last tidy-up: swap any new stubs, and drop the few that still poke in and back out.
+        const late = stubSpots(r.coords, spots);
+        if (late.size) {
+          const swapped = swapStubs(spots, late, candidates, rand);
+          const again = await routeThrough([origin, ...swapped.map((sp) => sp.coord), dest], rules).catch(() => null);
+          if (again) {
+            spots = swapped;
+            r = again;
+          }
+        }
         const lateStubs = stubSpots(r.coords, spots);
-        if (lateStubs.size) {
+        if (lateStubs.size && lateStubs.size <= Math.max(2, spots.length * 0.1)) {
           const kept = spots.filter((_, i) => !lateStubs.has(i));
           const again = kept.length ? await routeThrough([origin, ...kept.map((sp) => sp.coord), dest], rules).catch(() => null) : null;
           if (again) {
