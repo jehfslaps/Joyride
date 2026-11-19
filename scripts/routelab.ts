@@ -161,7 +161,8 @@ async function main() {
       let k = 0;
       for (const r of routes) {
         k++;
-        const check = await routeThrough([uptownWhittier, ...r.via.map((v) => v.coord), trip.to], rules);
+        // Street-by-street routes are their own exact path; only the older kind needs re-routing to inspect.
+        const check = r.streets ? null : await routeThrough([uptownWhittier, ...r.via.map((v) => v.coord), trip.to], rules);
         const steps = (check as any)?.steps ?? [];
         const longest = Math.max(0, ...steps.map((st: any) => st.distance));
         const longOnes = steps.filter((st: any) => st.distance > 805).length;

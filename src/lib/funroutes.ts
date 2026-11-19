@@ -30,6 +30,7 @@ import {
   STYLES,
   withDips,
 } from './streetgraph';
+import { streetsFromTiles } from './streettiles';
 
 export type RouteStyle = 'fastest' | 'weave';
 
@@ -728,7 +729,8 @@ async function streetRoutes(
   add: (r: RouteOption) => void,
 ): Promise<number> {
   const halfWidth = Math.min(2200, Math.max(1200, base.distanceM * 0.12));
-  const ways = await fetchStreets(bandAround(base.coords, halfWidth));
+  // Streets from Mapbox's map tiles; OpenStreetMap's public server as a backup.
+  const ways = await streetsFromTiles(base.coords, halfWidth).catch(() => fetchStreets(bandAround(base.coords, halfWidth)));
   const g = buildGraph(ways);
   const a = nearestNode(g, origin);
   const b = nearestNode(g, dest);
