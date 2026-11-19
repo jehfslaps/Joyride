@@ -1,7 +1,7 @@
 import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import MapView from 'react-native-maps';
 import Animated from 'react-native-reanimated';
 import { enterFade, enterRise, exitFade, moveList } from '@/lib/motion';
@@ -10,6 +10,7 @@ import { ContextChip, GlassRow, GlowRoute, HeroNumber, Label, LivePuck, PinTile,
 import { useHere } from '@/lib/useHere';
 import { JoyrideNav } from '../../../modules/joyride-nav';
 import { DEMO } from '@/lib/demo';
+import { getRecorderState, startRecording } from '@/lib/recorder';
 import { distance, formatMiles, heroDuration, type LngLat } from '@/lib/geo';
 import { Guidance } from '@/lib/guidance';
 import { buildRouteFromDrive, hasMapbox, MapboxError } from '@/lib/mapbox';
@@ -43,6 +44,7 @@ export default function DriveScreen() {
   const [points, setPoints] = useState<TrackPoint[]>([]);
   const [preparing, setPreparing] = useState<number | null>(null);
   const [choice, setChoice] = useState<Choice | null>(null);
+  const [recordBack, setRecordBack] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -82,7 +84,7 @@ export default function DriveScreen() {
   }
 
   async function onRelive() {
-    if (JoyrideNav?.isAvailable) return onNativeRelive();
+    if (JoyrideNav?.isAvailable) return onNativeRelive(false);
     try {
       setPreparing(0);
       const route = await getRoute();
@@ -112,8 +114,10 @@ export default function DriveScreen() {
     }
   }
 
-  // Relive the whole drive with the Mapbox navigation engine.
-  async function onNativeRelive() {
+  // Relive the whole drive with the Mapbox navigation engine, or drive it
+  // back: the same streets from the end to the start (one-way streets and
+  // ramps get a short legal detour, then it rejoins).
+  async function onNativeRelive(back = false) {
     if (!JoyrideNav) return;
     try {
       const perm = await Location.requestForegroundPermissionsAsync();
@@ -124,15 +128,18 @@ export default function DriveScreen() {
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const here: [number, number] = [pos.coords.longitude, pos.coords.latitude];
       const trace = points.map((p) => [p[0], p[1]] as [number, number]);
+      if (back) trace.reverse();
       const startAway = distance(here, trace[0]);
       const joinNearest = await new Promise<boolean>((resolve) => {
         if (startAway < 150) return resolve(false);
         Alert.alert('Where do you want to pick it up?', undefined, [
-          { text: 'From the beginning', onPress: () => resolve(false) },
+          { text: back ? 'From where it ended' : 'From the beginning', onPress: () => resolve(false) },
           { text: 'Nearest point', onPress: () => resolve(true) },
         ]);
       });
       setPreparing(0);
+      // The trip back is a new drive of its own.
+      if (back && recordBack && (await getRecorderState()) !== 'recording') await startRecording().catch(() => null);
       await JoyrideNav.startReplay(trace, here, joinNearest, false, false);
     } catch (e: any) {
       Alert.alert('Couldn’t start navigation', e?.message ?? String(e));
@@ -235,6 +242,21 @@ export default function DriveScreen() {
             onPress={onRelive}
             busy={preparing != null}
           />
+          {JoyrideNav?.isAvailable && (
+            <View style={{ gap: 10, marginTop: 10 }}>
+              <PrimaryPill
+                label="Drive it back"
+                icon="swap-horizontal"
+                tone="glass"
+                onPress={() => onNativeRelive(true)}
+                disabled={preparing != null}
+              />
+              <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4 }}>
+                <Text style={[t.caption, { flex: 1 }]}>Same streets, end to start. Record the trip back as a new drive</Text>
+                <Switch value={recordBack} onValueChange={setRecordBack} trackColor={{ true: p.brand }} accessibilityLabel="Record the trip back" />
+              </View>
+            </View>
+          )}
           </Animated.View>
         )}
 

@@ -152,7 +152,7 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     let items: [CPListItem] = drives.prefix(CPListTemplate.maximumItemCount).map { drive in
       let item = CPListItem(text: drive.title, detailText: drive.subtitle)
       item.handler = { _, completion in
-        MainActor.assumeIsolated { JoyrideCarPlay.shared.chooseStart(for: drive) }
+        MainActor.assumeIsolated { JoyrideCarPlay.shared.chooseDirection(for: drive) }
         completion()
       }
       return item
@@ -162,9 +162,24 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     manager?.interfaceController?.pushTemplate(template, animated: true, completion: nil)
   }
 
+  /// Relive it the way you drove it, or drive it back the other way.
+  private func chooseDirection(for drive: StoredDrive) {
+    let relive = CPListItem(text: "Relive this drive", detailText: "The same way you drove it")
+    relive.handler = { _, completion in
+      MainActor.assumeIsolated { JoyrideCarPlay.shared.chooseStart(trace: drive.coordinates) }
+      completion()
+    }
+    let back = CPListItem(text: "Drive it back", detailText: "The same streets, end to start")
+    back.handler = { _, completion in
+      MainActor.assumeIsolated { JoyrideCarPlay.shared.chooseStart(trace: Array(drive.coordinates.reversed())) }
+      completion()
+    }
+    let template = CPListTemplate(title: drive.title, sections: [CPListSection(items: [relive, back])])
+    manager?.interfaceController?.pushTemplate(template, animated: true, completion: nil)
+  }
+
   /// Near the start (usually home)? Go. Otherwise ask where to pick it up.
-  private func chooseStart(for drive: StoredDrive) {
-    let trace = drive.coordinates
+  private func chooseStart(trace: [CLLocationCoordinate2D]) {
     guard let here = Self.currentLocation(), let first = trace.first else {
       alert("Joyride doesn't know where you are yet.")
       return

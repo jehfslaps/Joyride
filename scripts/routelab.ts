@@ -178,13 +178,17 @@ async function main() {
         const hwy = r.highwayM;
         const m = await matched(r.coords);
         const cov = coverage(r.coords, m);
+        // Drive it back: the same path reversed. Divided roads and freeways use
+        // the other side (tens of meters over), so allow a wider match.
+        const reversed = [...r.coords].reverse();
+        const covBack = coverage(reversed, await matched(reversed), 60);
         const culsKept = r.via.filter((v) => v.kind === 'culdesac' && (project(v.coord, m)?.offset ?? 1e9) < 40).length;
         const culsDriven = r.via.filter((v) => v.kind === 'culdesac' && (project(v.coord, r.coords)?.offset ?? 1e9) < 40).length;
         log(
           `${String(k).padStart(2)}. ${min(r.durationS).padStart(7)} ${mi(r.distanceM).padStart(8)}  L${r.level} ${r.title} — ${r.blurb}` +
             `\n      spots ${r.via.length} (cul-de-sacs driven ${culsDriven}/${r.culDeSacs}, kept by matching ${culsKept})` +
             ` · freeway ${mi(fwy)} · highway ${mi(hwy)}${r.usesHighway ? ' (flagged)' : ''}` +
-            ` · street U-turns ${uTurnsAtStreets(r)} · nav match ${(cov * 100).toFixed(0)}%` +
+            ` · street U-turns ${uTurnsAtStreets(r)} · nav match ${(cov * 100).toFixed(0)}% · drive-back match ${(covBack * 100).toFixed(0)}%` +
             `\n      turns ${turns} · longest straight ${mi(longest)} · stretches over ½ mi: ${longOnes} · other main streets ${mains.size} (${[...mains].slice(0, 4).join(', ')})`,
         );
         if (r.streets?.length) log(`      streets: ${r.streets.join(' → ')}`);
