@@ -136,6 +136,7 @@ jobs:
           sleep 30
           kill -INT $REC; wait $REC || true
 
+          screen dark-9-mystery-routes "/routes?lng=-117.8653&lat=34.0203&name=Walnut&secret=1&pick=weave" 50
           screen dark-7-relive-navigation "/drive/1794717720000?go=1" 60
           sleep 30
           xcrun simctl io "$DEVICE" screenshot shots/dark-8-relive-navigation-later.png

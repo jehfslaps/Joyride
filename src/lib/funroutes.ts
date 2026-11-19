@@ -739,6 +739,16 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
           spots = fewer;
           r = again;
         }
+        // Last tidy-up: spots added along the way that only poke in and back out.
+        const lateStubs = stubSpots(r.coords, spots);
+        if (lateStubs.size) {
+          const kept = spots.filter((_, i) => !lateStubs.has(i));
+          const again = kept.length ? await routeThrough([origin, ...kept.map((sp) => sp.coord), dest], rules).catch(() => null) : null;
+          if (again) {
+            spots = kept;
+            r = again;
+          }
+        }
         // A route that wandered off far beyond what was asked isn't fun, it's broken.
         if (r.durationS > base.durationS * 12 && r.durationS > base.durationS + 180 * 60) return null;
         const via = spots.map(({ coord, kind, name }) => ({ coord, kind, name }));
