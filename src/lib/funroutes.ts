@@ -254,11 +254,11 @@ export interface Level {
 }
 
 export const LEVELS: Level[] = [
-  { amplitude: 800, wavelength: 5000, spacing: 700, maxStraight: 800, culPer10km: 1, minCul: 1, maxCul: 3, maxSpots: 45, odds: 1, title: 'A few side streets' },
-  { amplitude: 1000, wavelength: 4200, spacing: 520, maxStraight: 650, culPer10km: 2, minCul: 1, maxCul: 5, maxSpots: 65, odds: 1, title: 'Side-street wander' },
-  { amplitude: 1200, wavelength: 3600, spacing: 400, maxStraight: 500, culPer10km: 3, minCul: 2, maxCul: 7, maxSpots: 90, odds: 2, title: 'Neighborhood zigzag' },
-  { amplitude: 1400, wavelength: 3000, spacing: 300, maxStraight: 400, culPer10km: 5, minCul: 2, maxCul: 10, maxSpots: 120, odds: 2, title: 'Deep zigzag' },
-  { amplitude: 1600, wavelength: 2600, spacing: 220, maxStraight: 320, culPer10km: 7, minCul: 3, maxCul: 14, maxSpots: 160, odds: 3, title: 'Every nook' },
+  { amplitude: 800, wavelength: 5000, spacing: 1100, maxStraight: 1200, culPer10km: 1, minCul: 1, maxCul: 2, maxSpots: 30, odds: 1, title: 'A few side streets' },
+  { amplitude: 1000, wavelength: 4200, spacing: 800, maxStraight: 900, culPer10km: 1.5, minCul: 1, maxCul: 4, maxSpots: 45, odds: 1, title: 'Side-street wander' },
+  { amplitude: 1200, wavelength: 3600, spacing: 550, maxStraight: 650, culPer10km: 2.5, minCul: 2, maxCul: 6, maxSpots: 70, odds: 2, title: 'Neighborhood zigzag' },
+  { amplitude: 1400, wavelength: 3000, spacing: 400, maxStraight: 500, culPer10km: 4, minCul: 2, maxCul: 9, maxSpots: 100, odds: 2, title: 'Deep zigzag' },
+  { amplitude: 1600, wavelength: 2600, spacing: 280, maxStraight: 400, culPer10km: 6, minCul: 3, maxCul: 12, maxSpots: 140, odds: 3, title: 'Every nook' },
 ];
 
 /** Spots closer than this to the quick way just touch the corner of a side street. */
@@ -505,7 +505,17 @@ export function setContinueStraight(v: boolean) {
 export async function routeThrough(points: LngLat[], rules: RoadRules, continueStraight = CONTINUE_STRAIGHT) {
   const pieces: LngLat[][] = [];
   for (let i = 0; i < points.length - 1; i += 24) pieces.push(points.slice(i, Math.min(points.length, i + 25)));
-  const results = await Promise.all(pieces.map((p) => routeWithRules(p, rules, continueStraight)));
+  // A spot Mapbox can't reach (a gated street, say) shouldn't sink the whole
+  // route: retry that piece with fewer spots, then with just its two ends.
+  const robust = async (p: LngLat[]) => {
+    const tries = [p, p.filter((_, i) => i === 0 || i === p.length - 1 || i % 2 === 0), [p[0], p[p.length - 1]]];
+    for (const t of tries) {
+      const r = await routeWithRules(t, rules, continueStraight).catch(() => null);
+      if (r) return r;
+    }
+    return null;
+  };
+  const results = await Promise.all(pieces.map(robust));
   if (results.some((r) => !r)) return null;
   const coords: LngLat[] = [];
   for (const r of results) coords.push(...(coords.length ? r!.coords.slice(1) : r!.coords));
@@ -696,7 +706,8 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
             let best: Candidate | null = null;
             let bestScore = Infinity;
             for (const c of candidates) {
-              if (used.has(c) || (c.kind !== 'street' && c.kind !== 'culdesac')) continue;
+              // Only through-streets here; cul-de-sacs are counted and capped separately.
+              if (used.has(c) || c.kind !== 'street') continue;
               const d = distance(g, c.coord);
               if (d < 120 || d > 700) continue;
               const score = d - (c.isNew ? 100 : 0);
