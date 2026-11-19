@@ -250,15 +250,17 @@ export interface Level {
   /** At most this many spots, so very long trips stay sensible. */
   maxSpots: number;
   odds: number;
+  /** Time budget, as a multiple of the quickest way (0 = no limit). Over it, the route keeps every other spot. */
+  budget: number;
   title: string;
 }
 
 export const LEVELS: Level[] = [
-  { amplitude: 800, wavelength: 5000, spacing: 1100, maxStraight: 1200, culPer10km: 1, minCul: 1, maxCul: 2, maxSpots: 30, odds: 1, title: 'A few side streets' },
-  { amplitude: 1000, wavelength: 4200, spacing: 800, maxStraight: 900, culPer10km: 1.5, minCul: 1, maxCul: 4, maxSpots: 45, odds: 1, title: 'Side-street wander' },
-  { amplitude: 1200, wavelength: 3600, spacing: 550, maxStraight: 650, culPer10km: 2.5, minCul: 2, maxCul: 6, maxSpots: 70, odds: 2, title: 'Neighborhood zigzag' },
-  { amplitude: 1400, wavelength: 3000, spacing: 400, maxStraight: 500, culPer10km: 4, minCul: 2, maxCul: 9, maxSpots: 100, odds: 2, title: 'Deep zigzag' },
-  { amplitude: 1600, wavelength: 2600, spacing: 280, maxStraight: 400, culPer10km: 6, minCul: 3, maxCul: 12, maxSpots: 140, odds: 3, title: 'Every nook' },
+  { amplitude: 800, wavelength: 5000, spacing: 1100, maxStraight: 1200, culPer10km: 1, minCul: 1, maxCul: 2, maxSpots: 30, odds: 1, budget: 2, title: 'A few side streets' },
+  { amplitude: 1000, wavelength: 4200, spacing: 800, maxStraight: 900, culPer10km: 1.5, minCul: 1, maxCul: 4, maxSpots: 45, odds: 1, budget: 2.8, title: 'Side-street wander' },
+  { amplitude: 1200, wavelength: 3600, spacing: 550, maxStraight: 650, culPer10km: 2.5, minCul: 2, maxCul: 6, maxSpots: 70, odds: 2, budget: 3.8, title: 'Neighborhood zigzag' },
+  { amplitude: 1400, wavelength: 3000, spacing: 400, maxStraight: 500, culPer10km: 4, minCul: 2, maxCul: 9, maxSpots: 100, odds: 2, budget: 5, title: 'Deep zigzag' },
+  { amplitude: 1600, wavelength: 2600, spacing: 280, maxStraight: 400, culPer10km: 6, minCul: 3, maxCul: 12, maxSpots: 140, odds: 3, budget: 0, title: 'Every nook' },
 ];
 
 /** Spots closer than this to the quick way just touch the corner of a side street. */
@@ -728,8 +730,17 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
           spots = more;
           r = again;
         }
+        // Over its time budget: keep every other spot (cul-de-sacs and odd spots stay) and route again, up to twice.
+        for (let pass = 0; level.budget > 0 && pass < 2 && r.durationS > base.durationS * level.budget; pass++) {
+          const fewer = spots.filter((sp, i) => sp.kind === 'culdesac' || sp.kind === 'odd' || i % 2 === 0);
+          if (fewer.length === spots.length || fewer.length < 2) break;
+          const again = await routeThrough([origin, ...fewer.map((sp) => sp.coord), dest], rules).catch(() => null);
+          if (!again) break;
+          spots = fewer;
+          r = again;
+        }
         // A route that wandered off far beyond what was asked isn't fun, it's broken.
-        if (r.durationS > base.durationS * 8 && r.durationS > base.durationS + 120 * 60) return null;
+        if (r.durationS > base.durationS * 12 && r.durationS > base.durationS + 180 * 60) return null;
         const via = spots.map(({ coord, kind, name }) => ({ coord, kind, name }));
         const passes = [...new Set(spots.filter((s) => s.kind === 'odd').map((s) => s.name))].slice(0, 2);
         const culDeSacs = spots.filter((s) => s.kind === 'culdesac').length;
