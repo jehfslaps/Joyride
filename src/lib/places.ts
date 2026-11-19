@@ -90,6 +90,8 @@ export interface NearbyFeature {
   layer: string;
   cls: string;
   maki: string;
+  /** Road type for streets, e.g. "residential". */
+  type: string;
   distanceM: number;
 }
 
@@ -102,6 +104,7 @@ export async function nearby(
   radiusM: number,
   layers: string[],
   limit = 50,
+  opts: { geometry?: 'point' | 'linestring' | 'polygon'; dedupe?: boolean } = {},
 ): Promise<NearbyFeature[]> {
   const params = new URLSearchParams({
     radius: String(Math.round(radiusM)),
@@ -109,6 +112,8 @@ export async function nearby(
     layers: layers.join(','),
     access_token: MAPBOX_TOKEN,
   });
+  if (opts.geometry) params.set('geometry', opts.geometry);
+  if (opts.dedupe === false) params.set('dedupe', 'false');
   const url = `${API}/v4/mapbox.mapbox-streets-v8/tilequery/${at[0].toFixed(6)},${at[1].toFixed(6)}.json?${params}`;
   const body = await getJson(url);
   const features: any[] = Array.isArray(body?.features) ? body.features : [];
@@ -120,6 +125,35 @@ export async function nearby(
       layer: f.properties?.tilequery?.layer ?? '',
       cls: f.properties?.class ?? '',
       maki: f.properties?.maki ?? '',
+      type: f.properties?.type ?? '',
       distanceM: f.properties?.tilequery?.distance ?? 0,
     }));
+}
+
+/** The neighborhood (or, failing that, town) a point is in. */
+const areaCache = new Map<string, string | null>();
+export async function areaName(at: LngLat): Promise<string | null> {
+  const key = `${at[0].toFixed(3)},${at[1].toFixed(3)}`;
+  if (areaCache.has(key)) return areaCache.get(key) ?? null;
+  let name: string | null = null;
+  for (const types of ['neighborhood', 'locality,place']) {
+    const params = new URLSearchParams({
+      longitude: at[0].toFixed(6),
+      latitude: at[1].toFixed(6),
+      types,
+      limit: '1',
+      language: 'en',
+      access_token: MAPBOX_TOKEN,
+    });
+    try {
+      const body = await getJson(`${API}/search/geocode/v6/reverse?${params}`);
+      const p = body?.features?.[0]?.properties;
+      name = p?.name_preferred || p?.name || null;
+    } catch {
+      name = null;
+    }
+    if (name) break;
+  }
+  areaCache.set(key, name);
+  return name;
 }

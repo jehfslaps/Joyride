@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -17,13 +18,25 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { JoyrideNav } from '../../modules/joyride-nav';
 import { BigButton } from '@/components/BigButton';
-import { buildFunRoutes, type RouteOption } from '@/lib/funroutes';
+import { buildFunRoutes, NO_RULES, VisitedStreets, type RoadRules, type RouteOption } from '@/lib/funroutes';
 import { formatDuration, formatMiles, type LngLat } from '@/lib/geo';
 import { searchPlaces, type Place } from '@/lib/places';
 import { getRecorderState, startRecording } from '@/lib/recorder';
+import { getDrivePoints, listDrives } from '@/lib/storage';
 import { colors, radius, type } from '@/theme';
 
 const toLatLng = (c: LngLat) => ({ latitude: c[1], longitude: c[0] });
+const RULES_KEY = 'joyride:roadRules';
+
+/** Every street from your recorded drives, so routes can favor new ones. */
+async function loadVisited(): Promise<VisitedStreets> {
+  const traces: LngLat[][] = [];
+  for (const d of await listDrives()) {
+    const pts = await getDrivePoints(d.id).catch(() => []);
+    traces.push(pts.map((p) => [p[0], p[1]] as LngLat));
+  }
+  return new VisitedStreets(traces);
+}
 
 export default function FunRoutesScreen() {
   const params = useLocalSearchParams<{ lng?: string; lat?: string; name?: string; secret?: string; pick?: string }>();
@@ -45,7 +58,25 @@ export default function FunRoutesScreen() {
   const [selected, setSelected] = useState<string | null>(null);
   const [record, setRecord] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [rules, setRules] = useState<RoadRules | null>(null);
+  const [visited, setVisited] = useState<VisitedStreets | null>(null);
+  const [shuffle, setShuffle] = useState(0);
   const buildId = useRef(0);
+
+  // The switches remember how you left them.
+  useEffect(() => {
+    AsyncStorage.getItem(RULES_KEY)
+      .then((raw) => setRules(raw ? { ...NO_RULES, ...JSON.parse(raw) } : NO_RULES))
+      .catch(() => setRules(NO_RULES));
+    loadVisited().then(setVisited).catch(() => setVisited(new VisitedStreets([])));
+  }, []);
+
+  function toggle(key: keyof RoadRules) {
+    if (!rules) return;
+    const next = { ...rules, [key]: !rules[key] };
+    setRules(next);
+    AsyncStorage.setItem(RULES_KEY, JSON.stringify(next)).catch(() => {});
+  }
 
   useEffect(() => {
     (async () => {
@@ -76,14 +107,19 @@ export default function FunRoutesScreen() {
   }, [query, here, dest]);
 
   // Once there's a destination and we know where you are, build the menu.
+  // Flipping a switch (or tapping New routes) builds it again.
   useEffect(() => {
-    if (!dest || !here) return;
+    if (!dest || !here || !rules || !visited) return;
     const id = ++buildId.current;
     setRoutes([]);
     setSelected(null);
     setBuilding(true);
-    buildFunRoutes(here, dest.coord, undefined, (all) => {
-      if (id === buildId.current) setRoutes(all);
+    buildFunRoutes(here, dest.coord, {
+      rules,
+      visited,
+      onRoute: (all) => {
+        if (id === buildId.current) setRoutes(all);
+      },
     })
       .then((all) => {
         if (id !== buildId.current) return;
@@ -96,7 +132,7 @@ export default function FunRoutesScreen() {
       .finally(() => {
         if (id === buildId.current) setBuilding(false);
       });
-  }, [dest, here]);
+  }, [dest, here, rules, visited, shuffle]);
 
   // Optional ?pick=<style> selects the first route of that style once they're in.
   useEffect(() => {
@@ -154,6 +190,13 @@ export default function FunRoutesScreen() {
               onPress={() => setSelected(r.id)}
             />
           ))}
+          {chosen?.via
+            .filter((v) => v.kind !== 'street')
+            .map((v, i) => (
+              <Marker key={`via-${i}`} coordinate={toLatLng(v.coord)} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+                <View style={[styles.viaDot, { backgroundColor: v.kind === 'culdesac' ? colors.red : colors.green }]} />
+              </Marker>
+            ))}
           {dest && !secret && (
             <Marker coordinate={toLatLng(dest.coord)} tracksViewChanges={false}>
               <View style={styles.flag}>
@@ -225,9 +268,26 @@ export default function FunRoutesScreen() {
             keyExtractor={(r) => r.id}
             contentContainerStyle={{ padding: 20, gap: 8, paddingBottom: 12 }}
             ListHeaderComponent={
-              <Text style={[type.label, { marginBottom: 4 }]}>
-                {building ? 'FINDING FUN ROUTES…' : `${routes.length} ROUTES, FASTEST TO LONGEST`}
-              </Text>
+              <View style={{ gap: 12, marginBottom: 4 }}>
+                <View style={styles.chips}>
+                  <Chip label="No freeways" on={!!rules?.noFreeways} onPress={() => toggle('noFreeways')} />
+                  <Chip label="No highways" on={!!rules?.noHighways} onPress={() => toggle('noHighways')} />
+                  <View style={{ flex: 1 }} />
+                  <Pressable
+                    onPress={() => setShuffle((n) => n + 1)}
+                    disabled={building}
+                    hitSlop={8}
+                    style={({ pressed }) => [styles.shuffle, (pressed || building) && { opacity: 0.5 }]}
+                    accessibilityLabel="New routes"
+                  >
+                    <MaterialCommunityIcons name="shuffle-variant" size={18} color={colors.text} />
+                    <Text style={styles.shuffleText}>New</Text>
+                  </Pressable>
+                </View>
+                <Text style={type.label}>
+                  {building ? 'FINDING SIDE STREETS…' : `${routes.length} ROUTES, FASTEST TO LONGEST`}
+                </Text>
+              </View>
             }
             ListFooterComponent={building ? <ActivityIndicator color={colors.amber} style={{ marginTop: 8 }} /> : undefined}
             renderItem={({ item }) => {
@@ -244,8 +304,13 @@ export default function FunRoutesScreen() {
                   </Text>
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text style={styles.rowTitle}>{item.title}</Text>
-                    <Text style={type.small} numberOfLines={1}>
-                      {item.blurb} · {formatMiles(item.distanceM)}
+                    <Text style={type.small} numberOfLines={2}>
+                      {item.blurb}
+                    </Text>
+                    <Text style={[type.small, { color: colors.faint }]} numberOfLines={1}>
+                      {formatMiles(item.distanceM)}
+                      {item.newShare != null && item.style !== 'fastest' ? ` · ${Math.round(item.newShare * 100)}% new to you` : ''}
+                      {item.usesHighway ? ' · uses a highway briefly' : ''}
                     </Text>
                   </View>
                 </Pressable>
@@ -258,7 +323,7 @@ export default function FunRoutesScreen() {
               <Switch value={record} onValueChange={setRecord} trackColor={{ true: colors.amber }} accessibilityLabel="Record this drive" />
             </View>
             <BigButton
-              label={chosen ? `Go the ${chosen.title.toLowerCase()} way` : 'Pick a route'}
+              label={chosen ? (chosen.style === 'fastest' ? 'Go the quick way' : 'Start this route') : 'Pick a route'}
               icon="steering"
               onPress={go}
               disabled={!chosen}
@@ -268,6 +333,21 @@ export default function FunRoutesScreen() {
         </View>
       )}
     </View>
+  );
+}
+
+function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[styles.chip, on && styles.chipOn]}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: on }}
+      accessibilityLabel={label}
+    >
+      <MaterialCommunityIcons name={on ? 'check-circle' : 'circle-outline'} size={16} color={on ? colors.onAmber : colors.muted} />
+      <Text style={[styles.chipText, on && { color: colors.onAmber }]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -289,4 +369,11 @@ const styles = StyleSheet.create({
   routeTime: { width: 76, fontSize: 18, fontWeight: '800', color: colors.text, fontVariant: ['tabular-nums'] },
   footer: { paddingHorizontal: 20, paddingTop: 8, gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },
   recordRow: { flexDirection: 'row', alignItems: 'center' },
+  chips: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 36, paddingHorizontal: 12, borderRadius: radius.pill, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
+  chipOn: { backgroundColor: colors.amber, borderColor: colors.amber },
+  chipText: { fontSize: 14, fontWeight: '700', color: colors.text },
+  shuffle: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 36, paddingHorizontal: 10 },
+  shuffleText: { fontSize: 14, fontWeight: '700', color: colors.text },
+  viaDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 2, borderColor: '#fff' },
 });

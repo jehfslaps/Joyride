@@ -108,7 +108,7 @@ jobs:
 
           screen 1-home "" 45
           screen 2-saved-drive "/drive/1794114300000" 12
-          screen 3-fun-routes "/routes?lng=-117.7831&lat=33.5427&name=Laguna%20Beach&pick=scenic" 60
+          screen 3-fun-routes "/routes?lng=-117.7831&lat=33.5427&name=Laguna%20Beach&pick=weave" 60
           screen 4-surprise-me "/surprise" 10
           screen 5-settings "/settings" 8
           screen 6-welcome "/welcome" 8

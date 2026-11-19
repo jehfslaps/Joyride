@@ -13,6 +13,7 @@
     "**/*.tsx"
   ],
   "exclude": [
-    "tests"
+    "tests",
+    "scripts"
   ]
 }

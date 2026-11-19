@@ -1,0 +1,40 @@
+name: Route lab
+
+# Builds fun routes from Uptown Whittier against live Mapbox data, checks
+# them, and saves a map of each one to a private draft release "routelab".
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: routelab
+  cancel-in-progress: true
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Unit tests
+        run: npx tsx tests/funroutes.test.ts
+      - name: Build and check routes
+        env:
+          EXPO_PUBLIC_MAPBOX_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
+        run: npx tsx scripts/routelab.ts out
+      - name: Save maps to a draft release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls out/* >/dev/null 2>&1 || exit 0
+          gh release delete routelab --yes --cleanup-tag 2>/dev/null || true
+          gh release create routelab out/* --draft --target "$GITHUB_SHA" --title "Route lab" --notes "Fun-route test maps. Draft: only the owner can see it."

@@ -1,36 +1,59 @@
-// Fun routes: several unconventional ways to the same destination, sorted
-// from fastest to longest, plus picking a surprise destination.
+// Fun routes: ways to the same destination that weave through residential
+// side streets, dip into cul-de-sacs and pass little odd spots along the way,
+// sorted from fastest to longest. Plus picking a surprise destination.
 //
-// How a fun route is made: draw the straight line from you to the
-// destination, pick spots off to the side of it (parks and viewpoints for
-// Scenic, quiet streets for Neighborhoods, notable places for Landmarks…),
-// and ask Mapbox for a driving route that passes through them. Bigger
-// detours make longer routes.
+// How a fun route is made:
+//  1. Get the normal quickest route (obeying the No freeways / No highways
+//     switches).
+//  2. Look along it, a few hundred meters to each side, for residential
+//     streets, cul-de-sacs (turning circles at the end of dead-end streets)
+//     and odds and ends (parks, historic spots, viewpoints, public art).
+//  3. Pick some of them in order along the way, zig-zagging from side to side,
+//     and ask Mapbox for a route through them. Longer routes pick more spots
+//     and reach a little further from the main road, but they keep heading the
+//     same way: the extra time comes from twisty little streets, not distance.
+//  4. Streets the person has never recorded a drive on are preferred.
 
 import { MAPBOX_TOKEN } from '../config';
-import { bearing, distance, type LngLat } from './geo';
-import { nearby, type NearbyFeature, type Place } from './places';
+import { cumulative, distance, project, type LngLat } from './geo';
+import { areaName, nearby, type NearbyFeature, type Place } from './places';
 
-export type RouteStyle = 'fastest' | 'scenic' | 'neighborhoods' | 'landmarks' | 'backroads' | 'random';
+export type RouteStyle = 'fastest' | 'weave';
 
-export const STYLE_LABELS: Record<RouteStyle, string> = {
-  fastest: 'Fastest',
-  scenic: 'Scenic',
-  neighborhoods: 'Neighborhood wander',
-  landmarks: 'Landmarks',
-  backroads: 'Backroads',
-  random: 'Random',
-};
+export interface RoadRules {
+  noFreeways: boolean;
+  noHighways: boolean;
+}
+
+export const NO_RULES: RoadRules = { noFreeways: false, noHighways: false };
+
+export type ViaKind = 'street' | 'culdesac' | 'odd';
+
+export interface Via {
+  coord: LngLat;
+  kind: ViaKind;
+  name: string;
+}
 
 export interface RouteOption {
   id: string;
   style: RouteStyle;
+  /** 0 for the quickest route, 1 (a few side streets) to 5 (the long weave). */
+  level: number;
   title: string;
-  /** What makes it different, e.g. "Passes Oak Canyon Park". */
+  /** e.g. "Through Sunny Hills and La Habra Heights · 3 cul-de-sacs · passes Hillcrest Park". */
   blurb: string;
   durationS: number;
   distanceM: number;
   coords: LngLat[];
+  via: Via[];
+  through: string[];
+  passes: string[];
+  culDeSacs: number;
+  /** Share of the route (0..1) on streets with no recorded drive, or null with no drives recorded. */
+  newShare: number | null;
+  /** True when No highways is on but there was no way around one. */
+  usesHighway: boolean;
 }
 
 // ---- Pure geometry helpers (exported for tests) ---------------------------
@@ -63,217 +86,491 @@ export function randomPointInBox(b: [number, number, number, number], rand = Mat
   return [b[0] + rand() * (b[2] - b[0]), b[1] + rand() * (b[3] - b[1])];
 }
 
-/**
- * Spots to detour through: `count` points spread along the line from origin
- * to destination, pushed sideways by about `sideM` meters, alternating sides
- * (or random sides when `rand` is given a non-default source).
- */
-export function detourControlPoints(
-  origin: LngLat,
-  dest: LngLat,
-  sideM: number,
-  count: number,
-  rand = Math.random,
-): LngLat[] {
-  const total = distance(origin, dest);
-  const heading = bearing(origin, dest);
-  const firstSide = rand() < 0.5 ? 1 : -1;
-  const out: LngLat[] = [];
-  for (let i = 0; i < count; i++) {
-    const t = (i + 1) / (count + 1);
-    const along = destinationPoint(origin, heading, total * t);
-    const side = count > 1 && i % 2 === 1 ? -firstSide : firstSide;
-    const wobble = 0.75 + rand() * 0.5;
-    out.push(destinationPoint(along, heading + 90 * side, sideM * wobble));
-  }
-  return out;
+function bearingDeg(a: LngLat, b: LngLat): number {
+  const φ1 = rad(a[1]);
+  const φ2 = rad(b[1]);
+  const Δλ = rad(b[0] - a[0]);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (deg(Math.atan2(y, x)) + 360) % 360;
 }
 
-// ---- What each style looks for --------------------------------------------
+/** Point and heading `meters` along a line. */
+export function pointAlong(coords: LngLat[], cum: number[], meters: number): { at: LngLat; heading: number } {
+  const m = Math.max(0, Math.min(meters, cum[cum.length - 1]));
+  let i = 1;
+  while (i < cum.length - 1 && cum[i] < m) i++;
+  const a = coords[i - 1];
+  const b = coords[i];
+  const seg = cum[i] - cum[i - 1];
+  const t = seg > 0 ? (m - cum[i - 1]) / seg : 0;
+  return { at: [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], heading: bearingDeg(a, b) };
+}
 
-const SCENIC_MAKI = new Set(['park', 'garden', 'viewpoint', 'beach', 'mountain', 'natural', 'picnic-site', 'campsite', 'golf', 'marine-terminal', 'harbor', 'water', 'wetland']);
-const LANDMARK_MAKI = new Set([
-  'monument', 'museum', 'castle', 'attraction', 'landmark', 'art-gallery', 'theatre', 'town-hall',
-  'religious-christian', 'religious-jewish', 'religious-muslim', 'religious-buddhist', 'lighthouse',
-  'stadium', 'zoo', 'aquarium', 'amusement-park', 'observation-tower', 'historic',
+/** Where a point sits relative to a line: meters along it, and signed meters to the side (+ = left). */
+export function placeAlong(p: LngLat, coords: LngLat[], cum: number[]): { along: number; side: number } | null {
+  const proj = project(p, coords);
+  if (!proj) return null;
+  const i = Math.min(proj.index, coords.length - 2);
+  const a = coords[i];
+  const b = coords[i + 1];
+  const kx = Math.cos(rad(p[1])) * 111320;
+  const ky = 110540;
+  const cross = (b[0] - a[0]) * kx * ((p[1] - a[1]) * ky) - (b[1] - a[1]) * ky * ((p[0] - a[0]) * kx);
+  const along = cum[i] + (cum[i + 1] - cum[i]) * proj.t;
+  return { along, side: cross >= 0 ? proj.offset : -proj.offset };
+}
+
+// ---- Streets you've already driven ------------------------------------------
+
+/** Remembers every ~40 m square that a recorded drive went through. */
+export class VisitedStreets {
+  private cells = new Set<string>();
+  readonly empty: boolean;
+
+  constructor(traces: LngLat[][]) {
+    for (const t of traces) {
+      for (let i = 0; i < t.length; i++) {
+        this.add(t[i]);
+        if (i === 0) continue;
+        // Fill gaps between GPS fixes so fast stretches still count.
+        const d = distance(t[i - 1], t[i]);
+        const steps = Math.min(50, Math.floor(d / 20));
+        for (let s = 1; s < steps; s++) {
+          const f = s / steps;
+          this.add([t[i - 1][0] + (t[i][0] - t[i - 1][0]) * f, t[i - 1][1] + (t[i][1] - t[i - 1][1]) * f]);
+        }
+      }
+    }
+    this.empty = this.cells.size === 0;
+  }
+
+  private static cell(p: LngLat): [number, number] {
+    const lat = 40 / 110540;
+    const lng = 40 / (Math.cos(rad(p[1])) * 111320);
+    return [Math.floor(p[0] / lng), Math.floor(p[1] / lat)];
+  }
+
+  private add(p: LngLat) {
+    const [x, y] = VisitedStreets.cell(p);
+    this.cells.add(`${x}:${y}`);
+  }
+
+  /** True if a recorded drive passed within about 40 m. */
+  has(p: LngLat): boolean {
+    const [x, y] = VisitedStreets.cell(p);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (this.cells.has(`${x + dx}:${y + dy}`)) return true;
+    return false;
+  }
+
+  /** Share of a route (0..1) that isn't on a recorded drive. */
+  newShare(coords: LngLat[]): number | null {
+    if (this.empty || coords.length < 2) return null;
+    let total = 0;
+    let fresh = 0;
+    for (let i = 1; i < coords.length; i++) {
+      const d = distance(coords[i - 1], coords[i]);
+      const steps = Math.max(1, Math.round(d / 30));
+      for (let s = 0; s < steps; s++) {
+        const f = (s + 0.5) / steps;
+        const p: LngLat = [coords[i - 1][0] + (coords[i][0] - coords[i - 1][0]) * f, coords[i - 1][1] + (coords[i][1] - coords[i - 1][1]) * f];
+        total += d / steps;
+        if (!this.has(p)) fresh += d / steps;
+      }
+    }
+    return total > 0 ? fresh / total : null;
+  }
+}
+
+// ---- What counts as a fun spot ----------------------------------------------
+
+const QUIET_STREETS = new Set(['street', 'street_limited']);
+const NOT_REAL_STREETS = new Set(['service', 'driveway', 'parking_aisle', 'alley', 'drive-through', 'emergency_access']);
+const CUL_DE_SAC = new Set(['turning_circle', 'turning_loop']);
+const ODD_CLASSES = new Set(['park_like', 'historic', 'landmark', 'arts_and_entertainment', 'visitor_amenities']);
+const ODD_MAKI = new Set([
+  'park', 'garden', 'viewpoint', 'monument', 'museum', 'castle', 'attraction', 'landmark', 'art-gallery',
+  'observation-tower', 'historic', 'lighthouse', 'water', 'picnic-site', 'playground', 'theatre', 'town-hall',
+  'library', 'zoo', 'aquarium', 'golf', 'natural', 'waterfall', 'mountain', 'wetland',
 ]);
-const STREET_CLASSES = new Set(['street', 'street_limited', 'tertiary', 'secondary']);
-const QUIET_STREET_CLASSES = new Set(['street', 'street_limited']);
+const BORING_MAKI = new Set([
+  'shop', 'grocery', 'fast-food', 'fuel', 'car', 'car-repair', 'car-rental', 'parking', 'parking-garage',
+  'bank', 'pharmacy', 'convenience', 'clothing-store', 'mobile-phone', 'hardware', 'laundry', 'dentist',
+  'doctor', 'hospital', 'commercial', 'restaurant', 'cafe', 'bar', 'alcohol-shop', 'lodging', 'post',
+]);
 
-function pickFeature(features: NearbyFeature[], style: RouteStyle, rand: () => number): NearbyFeature | null {
-  let pool: NearbyFeature[] = [];
-  if (style === 'scenic') {
-    pool = features.filter((f) => (f.layer === 'poi_label' && (SCENIC_MAKI.has(f.maki) || f.cls === 'park_like')) || f.layer === 'natural_label');
-  } else if (style === 'landmarks') {
-    pool = features.filter((f) => f.layer === 'poi_label' && f.name && (LANDMARK_MAKI.has(f.maki) || f.cls === 'historic' || f.cls === 'landmark'));
-  } else if (style === 'neighborhoods' || style === 'backroads') {
-    pool = features.filter((f) => f.layer === 'road' && QUIET_STREET_CLASSES.has(f.cls));
-  } else {
-    pool = features.filter((f) => f.layer === 'road' && STREET_CLASSES.has(f.cls));
+export function isOddSpot(f: Pick<NearbyFeature, 'layer' | 'cls' | 'maki' | 'name'>): boolean {
+  if (f.layer !== 'poi_label' || !f.name) return false;
+  if (BORING_MAKI.has(f.maki)) return false;
+  return ODD_CLASSES.has(f.cls) || ODD_MAKI.has(f.maki);
+}
+
+export function isQuietStreet(f: Pick<NearbyFeature, 'layer' | 'cls' | 'type'>): boolean {
+  return f.layer === 'road' && QUIET_STREETS.has(f.cls) && !NOT_REAL_STREETS.has(f.type);
+}
+
+export function isCulDeSac(f: Pick<NearbyFeature, 'layer' | 'cls'>): boolean {
+  return f.layer === 'road' && CUL_DE_SAC.has(f.cls);
+}
+
+export interface Candidate extends Via {
+  /** Meters along the quickest route. */
+  along: number;
+  /** Signed meters to the side of the quickest route (+ = left). */
+  side: number;
+  isNew: boolean;
+}
+
+// ---- Picking spots -----------------------------------------------------------
+
+export interface Level {
+  /** How far from the main route spots may be, in meters. */
+  reach: number;
+  /** Spots per kilometer of trip. */
+  perKm: number;
+  minSpots: number;
+  culDeSacs: number;
+  odds: number;
+  title: string;
+}
+
+export const LEVELS: Level[] = [
+  { reach: 450, perKm: 0.3, minSpots: 2, culDeSacs: 1, odds: 1, title: 'A few side streets' },
+  { reach: 700, perKm: 0.5, minSpots: 3, culDeSacs: 2, odds: 1, title: 'Side-street wander' },
+  { reach: 1000, perKm: 0.75, minSpots: 4, culDeSacs: 3, odds: 2, title: 'Neighborhood weave' },
+  { reach: 1400, perKm: 1.05, minSpots: 6, culDeSacs: 4, odds: 2, title: 'Deep weave' },
+  { reach: 1900, perKm: 1.4, minSpots: 8, culDeSacs: 6, odds: 3, title: 'The long weave' },
+];
+
+/** Mapbox allows 25 points per route: start, end and 23 in between. */
+const MAX_SPOTS = 22;
+/** Spots closer than this to the main route just touch the corner of a side street. */
+const MIN_REACH = 90;
+
+/**
+ * Chooses the spots for one route, in order along the way. The trip is cut
+ * into equal stretches and one spot is taken from each, alternating sides so
+ * the route zig-zags; some stretches take a cul-de-sac or an odd spot instead.
+ */
+export function pickSpots(candidates: Candidate[], tripM: number, level: Level, rand: () => number): Candidate[] {
+  const n = Math.max(level.minSpots, Math.min(MAX_SPOTS, Math.round((level.perKm * tripM) / 1000)));
+  const lo = tripM * 0.05;
+  const hi = tripM * 0.95;
+  const width = (hi - lo) / n;
+  const usable = candidates.filter((c) => {
+    const reach = Math.abs(c.side);
+    const max = c.kind === 'odd' ? Math.min(level.reach, 450) : level.reach;
+    return c.along >= lo && c.along <= hi && reach >= (c.kind === 'odd' ? 0 : MIN_REACH) && reach <= max;
+  });
+
+  const bins: Candidate[][] = Array.from({ length: n }, () => []);
+  for (const c of usable) bins[Math.min(n - 1, Math.floor((c.along - lo) / width))].push(c);
+
+  // Which stretches get a cul-de-sac or an odd spot.
+  const special = new Map<number, ViaKind>();
+  const assign = (kind: ViaKind, count: number) => {
+    const open = bins.map((b, i) => i).filter((i) => !special.has(i) && bins[i].some((c) => c.kind === kind));
+    shuffle(open, rand);
+    for (const i of open.slice(0, count)) special.set(i, kind);
+  };
+  assign('culdesac', level.culDeSacs);
+  assign('odd', level.odds);
+
+  const picked: Candidate[] = [];
+  let side = rand() < 0.5 ? 1 : -1;
+  for (let i = 0; i < n; i++) {
+    const want = special.get(i) ?? 'street';
+    let pool = bins[i].filter((c) => c.kind === want);
+    if (!pool.length) pool = bins[i].filter((c) => c.kind === 'street');
+    if (!pool.length) continue;
+    const sameSide = pool.filter((c) => Math.sign(c.side) === side);
+    if (sameSide.length) pool = sameSide;
+    const choice = weightedPick(pool, (c) => (c.isNew ? 3 : 1), rand);
+    const last = picked[picked.length - 1];
+    if (last && distance(last.coord, choice.coord) < 150) continue;
+    picked.push(choice);
+    side = choice.side >= 0 ? -1 : 1;
   }
-  if (!pool.length) return null;
-  // Prefer named places, and don't always take the closest one.
-  const named = pool.filter((f) => f.name);
-  const from = named.length ? named : pool;
-  const top = from.slice(0, Math.min(5, from.length));
-  return top[Math.floor(rand() * top.length)];
+  return picked.sort((a, b) => a.along - b.along);
 }
 
-function layersFor(style: RouteStyle): string[] {
-  if (style === 'scenic') return ['poi_label', 'natural_label'];
-  if (style === 'landmarks') return ['poi_label'];
-  return ['road'];
+function shuffle<T>(a: T[], rand: () => number) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
 }
 
-// ---- Directions ------------------------------------------------------------
+function weightedPick<T>(items: T[], weight: (t: T) => number, rand: () => number): T {
+  const total = items.reduce((s, t) => s + weight(t), 0);
+  let r = rand() * total;
+  for (const t of items) {
+    r -= weight(t);
+    if (r <= 0) return t;
+  }
+  return items[items.length - 1];
+}
+
+// ---- Directions --------------------------------------------------------------
+
+interface Step {
+  name?: string;
+  ref?: string;
+  distance: number;
+  geometry?: { coordinates: LngLat[] };
+  intersections?: { classes?: string[] }[];
+}
 
 interface DirectionsResult {
   durationS: number;
   distanceM: number;
   coords: LngLat[];
+  steps: Step[];
 }
 
-async function directions(points: LngLat[], opts: { exclude?: string } = {}): Promise<DirectionsResult | null> {
+/** A numbered state or US route that isn't a freeway: Whittier Blvd (CA 72), Beach Blvd (CA 39), PCH (CA 1). */
+export function isHighwayStep(step: Step): boolean {
+  if (step.distance < 150) return false;
+  const freeway = (step.intersections ?? []).some((x) => x.classes?.includes('motorway'));
+  if (freeway) return false;
+  const ref = step.ref ?? '';
+  const name = step.name ?? '';
+  return /\b(CA|SR|US|HWY|STATE ROUTE|ROUTE)[\s-]?\d+/i.test(ref) || /\b(highway|hwy|pacific coast)\b/i.test(name);
+}
+
+/** Points along highway stretches, used to tell Mapbox to route around them. */
+export function highwayBlockPoints(steps: Step[], every = 300): LngLat[] {
+  const out: LngLat[] = [];
+  for (const s of steps) {
+    if (!isHighwayStep(s)) continue;
+    const c = s.geometry?.coordinates ?? [];
+    if (c.length < 2) continue;
+    const cum = cumulative(c);
+    const len = cum[cum.length - 1];
+    if (len < 160) continue;
+    for (let m = Math.min(80, len / 2); m <= len - 80; m += every) out.push(pointAlong(c, cum, m).at);
+    if (len < 320) out.push(pointAlong(c, cum, len / 2).at);
+  }
+  return out;
+}
+
+async function directions(points: LngLat[], noFreeways: boolean, blocked: LngLat[]): Promise<DirectionsResult | null> {
   if (points.length < 2) return null;
   const params = new URLSearchParams({
     access_token: MAPBOX_TOKEN,
     geometries: 'geojson',
     overview: 'full',
     steps: 'true',
-    // Detour spots shape the route without becoming stops.
+    // Spots shape the route without becoming stops, and the route may turn
+    // around at one (that's how a cul-de-sac works).
     waypoints: `0;${points.length - 1}`,
+    continue_straight: 'false',
   });
-  if (opts.exclude) params.set('exclude', opts.exclude);
+  const exclude = [
+    ...(noFreeways ? ['motorway'] : []),
+    ...blocked.slice(0, 45).map((p) => `point(${p[0].toFixed(6)} ${p[1].toFixed(6)})`),
+  ];
   const path = points.map((p) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`).join(';');
-  const res = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${path}?${params}`);
+  const excludeParam = exclude.length ? `&exclude=${encodeURIComponent(exclude.join(','))}` : '';
+  const res = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${path}?${params}${excludeParam}`);
   if (!res.ok) return null;
   const body = await res.json();
   const route = body?.routes?.[0];
   if (body?.code !== 'Ok' || !route?.geometry?.coordinates) return null;
-  return {
-    durationS: route.duration,
-    distanceM: route.distance,
-    coords: route.geometry.coordinates as LngLat[],
-  };
+  const steps: Step[] = (route.legs ?? []).flatMap((l: any) => l.steps ?? []);
+  return { durationS: route.duration, distanceM: route.distance, coords: route.geometry.coordinates as LngLat[], steps };
 }
 
-// ---- Building the menu -------------------------------------------------------
-
-/** Detour sizes, as a share of the trip's straight-line length. Bigger = longer route. */
-const SIZES = [0.18, 0.4, 0.75];
-
-/** How sideways a detour of `size` goes, in meters (short trips still get real detours). */
-export function sidewaysMeters(tripM: number, size: number): number {
-  return Math.max(1200, Math.max(tripM, 4000) * size);
+/** A route through `points` that follows the switches, routing around highways when asked. */
+export async function routeWithRules(points: LngLat[], rules: RoadRules): Promise<(DirectionsResult & { usesHighway: boolean }) | null> {
+  let blocked: LngLat[] = [];
+  let last: DirectionsResult | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await directions(points, rules.noFreeways, blocked);
+    if (!r) break;
+    last = r;
+    if (!rules.noHighways) return { ...r, usesHighway: false };
+    const more = highwayBlockPoints(r.steps);
+    if (!more.length) return { ...r, usesHighway: false };
+    if (blocked.length >= 45) break;
+    blocked = [...blocked, ...more].slice(0, 45);
+  }
+  return last ? { ...last, usesHighway: rules.noHighways && highwayBlockPoints(last.steps).length > 0 } : null;
 }
 
-async function styledRoute(
-  origin: LngLat,
-  dest: LngLat,
-  style: RouteStyle,
-  size: number,
-  rand: () => number,
-): Promise<RouteOption | null> {
-  const trip = distance(origin, dest);
-  const side = sidewaysMeters(trip, size);
-  const count = size < 0.3 ? 1 : 2;
-  const controls = detourControlPoints(origin, dest, side, count, rand);
-  const via: LngLat[] = [];
-  const names: string[] = [];
-  for (const c of controls) {
-    let spot = c;
-    try {
-      const found = await nearby(c, Math.max(800, side * 0.5), layersFor(style));
-      const pick = pickFeature(found, style, rand);
-      if (pick) {
-        spot = pick.coord;
-        if (pick.name && pick.layer !== 'road') names.push(pick.name);
-      }
-    } catch {
-      // No nearby data: the raw spot still makes a detour.
+// ---- Looking along the route ------------------------------------------------------
+
+async function inBatches<T>(jobs: (() => Promise<T>)[], size: number): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < jobs.length; i += size) out.push(...(await Promise.all(jobs.slice(i, i + size).map((j) => j()))));
+  return out;
+}
+
+/** Residential streets, cul-de-sacs and odd spots on both sides of `base`. */
+export async function gatherCandidates(base: LngLat[], visited: VisitedStreets | null): Promise<Candidate[]> {
+  const cum = cumulative(base);
+  const len = cum[cum.length - 1];
+  const stepM = Math.min(3000, Math.max(450, len / 12));
+  const offset = Math.min(800, Math.max(300, stepM * 0.55));
+  const jobs: (() => Promise<NearbyFeature[]>)[] = [];
+  let k = 0;
+  for (let m = Math.min(300, len / 2); m < len - 150; m += stepM, k++) {
+    const { at, heading } = pointAlong(base, cum, m);
+    const centers: [LngLat, number][] = [
+      [destinationPoint(at, heading - 90, offset), offset],
+      [destinationPoint(at, heading + 90, offset), offset],
+    ];
+    if (k % 2 === 1 && len > 5000) {
+      centers.push([destinationPoint(at, heading - 90, offset * 2.3), offset * 1.2]);
+      centers.push([destinationPoint(at, heading + 90, offset * 2.3), offset * 1.2]);
     }
-    via.push(spot);
+    for (const [c, r] of centers) {
+      jobs.push(() => nearby(c, r, ['road'], 50, { geometry: 'linestring' }).catch(() => []));
+      jobs.push(() => nearby(c, r * 1.1, ['road'], 50, { geometry: 'point', dedupe: false }).catch(() => []));
+    }
+    jobs.push(() => nearby(at, 450, ['poi_label'], 30).catch(() => []));
   }
-  const result = await directions([origin, ...via, dest], style === 'backroads' ? { exclude: 'motorway' } : {});
-  if (!result) return null;
-  return {
-    id: `${style}-${size}-${Math.round(result.durationS)}`,
-    style,
-    title: STYLE_LABELS[style],
-    blurb: blurbFor(style, names),
-    ...result,
-  };
+  const found = (await inBatches(jobs, 8)).flat();
+
+  const out: Candidate[] = [];
+  const seen = new Set<string>();
+  for (const f of found) {
+    const kind: ViaKind | null = isCulDeSac(f) ? 'culdesac' : isQuietStreet(f) ? 'street' : isOddSpot(f) ? 'odd' : null;
+    if (!kind) continue;
+    const key = `${kind}:${f.coord[0].toFixed(4)},${f.coord[1].toFixed(4)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const where = placeAlong(f.coord, base, cum);
+    if (!where) continue;
+    out.push({ coord: f.coord, kind, name: f.name, along: where.along, side: where.side, isNew: !visited || !visited.has(f.coord) });
+  }
+  return out;
 }
 
-function blurbFor(style: RouteStyle, names: string[]): string {
-  const unique = [...new Set(names)].slice(0, 2);
-  const list = unique.join(' and ');
-  switch (style) {
-    case 'scenic':
-      return list ? `Passes ${list}` : 'Parks, water and views along the way';
-    case 'landmarks':
-      return list ? `Drives by ${list}` : 'Past places worth seeing';
-    case 'neighborhoods':
-      return 'Winds through quiet residential streets';
-    case 'backroads':
-      return 'Stays off the freeway';
-    case 'random':
-      return 'A surprise route, different every time';
-    default:
-      return 'The usual quickest way';
-  }
+// ---- Labels ------------------------------------------------------------------------
+
+export function describe(through: string[], culDeSacs: number, passes: string[]): string {
+  const parts: string[] = [];
+  if (through.length) parts.push(`Through ${joinNames(through)}`);
+  if (culDeSacs) parts.push(`${culDeSacs} cul-de-sac${culDeSacs === 1 ? '' : 's'}`);
+  if (passes.length) parts.push(`passes ${joinNames(passes)}`);
+  return parts.length ? parts.join(' · ') : 'Winds through residential side streets';
+}
+
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+async function neighborhoodsOn(spots: Via[], skip: Set<string>): Promise<string[]> {
+  const sample = spots.filter((_, i) => spots.length <= 6 || i % Math.ceil(spots.length / 6) === 0);
+  const names = await Promise.all(sample.map((s) => areaName(s.coord).catch(() => null)));
+  const out: string[] = [];
+  for (const n of names) if (n && !skip.has(n) && !out.includes(n)) out.push(n);
+  return out.slice(0, 3);
+}
+
+// ---- Building the menu ---------------------------------------------------------------
+
+export interface BuildOptions {
+  rules?: RoadRules;
+  /** Streets from recorded drives, to favor new ones. */
+  visited?: VisitedStreets | null;
+  onRoute?: (all: RouteOption[]) => void;
+  rand?: () => number;
+  /** Routes per level (each a different random pick). */
+  variants?: number;
 }
 
 /**
  * Builds the menu of routes to `dest`, fastest first. `onRoute` is called as
  * each one arrives, so the list can fill in while the rest are worked out.
  */
-export async function buildFunRoutes(
-  origin: LngLat,
-  dest: LngLat,
-  styles: RouteStyle[] = ['scenic', 'neighborhoods', 'landmarks', 'backroads', 'random'],
-  onRoute?: (all: RouteOption[]) => void,
-  rand: () => number = Math.random,
-): Promise<RouteOption[]> {
+export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOptions = {}): Promise<RouteOption[]> {
+  const rules = opts.rules ?? NO_RULES;
+  const rand = opts.rand ?? Math.random;
+  const visited = opts.visited ?? null;
+  const variants = opts.variants ?? 2;
   const found: RouteOption[] = [];
   const add = (r: RouteOption | null) => {
     if (!r) return;
     found.push(r);
-    onRoute?.(dedupe(found));
+    opts.onRoute?.(dedupe(found));
   };
 
-  const fastest = await directions([origin, dest]);
-  if (fastest) {
-    add({ id: 'fastest', style: 'fastest', title: 'Fastest', blurb: 'The usual quickest way', ...fastest });
-  }
-  const backroadsPlain = styles.includes('backroads') ? await directions([origin, dest], { exclude: 'motorway' }) : null;
-  if (backroadsPlain) {
-    add({ id: 'backroads-plain', style: 'backroads', title: 'Backroads', blurb: 'Stays off the freeway', ...backroadsPlain });
-  }
+  const base = await routeWithRules([origin, dest], rules);
+  if (!base) return [];
+  add({
+    id: 'fastest',
+    style: 'fastest',
+    level: 0,
+    title: 'Quickest',
+    blurb: rules.noFreeways || rules.noHighways ? 'The quickest way that follows your switches' : 'The usual quickest way',
+    durationS: base.durationS,
+    distanceM: base.distanceM,
+    coords: base.coords,
+    via: [],
+    through: [],
+    passes: [],
+    culDeSacs: 0,
+    newShare: visited?.newShare(base.coords) ?? null,
+    usesHighway: base.usesHighway,
+  });
 
-  // Work out the styled routes a few at a time.
+  const candidates = await gatherCandidates(base.coords, visited);
+  const [fromArea, toArea] = await Promise.all([areaName(origin).catch(() => null), areaName(dest).catch(() => null)]);
+  const skip = new Set([fromArea, toArea].filter((x): x is string => !!x));
+
   const jobs: (() => Promise<RouteOption | null>)[] = [];
-  for (const size of SIZES) {
-    for (const style of styles) jobs.push(() => styledRoute(origin, dest, style, size, rand).catch(() => null));
-  }
-  const parallel = 3;
-  for (let i = 0; i < jobs.length; i += parallel) {
-    const batch = await Promise.all(jobs.slice(i, i + parallel).map((j) => j()));
+  LEVELS.forEach((level, li) => {
+    for (let v = 0; v < variants; v++) {
+      jobs.push(async () => {
+        const spots = pickSpots(candidates, base.distanceM, level, rand);
+        if (!spots.length) return null;
+        const r = await routeWithRules([origin, ...spots.map((s) => s.coord), dest], rules).catch(() => null);
+        if (!r) return null;
+        // A route that wandered off far beyond what was asked isn't fun, it's broken.
+        if (r.durationS > base.durationS * 4 && r.durationS > base.durationS + 45 * 60) return null;
+        const via = spots.map(({ coord, kind, name }) => ({ coord, kind, name }));
+        const passes = [...new Set(spots.filter((s) => s.kind === 'odd').map((s) => s.name))].slice(0, 2);
+        const culDeSacs = spots.filter((s) => s.kind === 'culdesac').length;
+        const through = await neighborhoodsOn(via, skip);
+        return {
+          id: `weave-${li + 1}-${v}-${Math.round(r.durationS)}`,
+          style: 'weave' as const,
+          level: li + 1,
+          title: level.title,
+          blurb: describe(through, culDeSacs, passes),
+          durationS: r.durationS,
+          distanceM: r.distanceM,
+          coords: r.coords,
+          via,
+          through,
+          passes,
+          culDeSacs,
+          newShare: visited?.newShare(r.coords) ?? null,
+          usesHighway: r.usesHighway,
+        };
+      });
+    }
+  });
+  for (let i = 0; i < jobs.length; i += 3) {
+    const batch = await Promise.all(jobs.slice(i, i + 3).map((j) => j().catch(() => null)));
     batch.forEach(add);
   }
   return dedupe(found);
 }
 
-/** Drops near-duplicates (within 2 minutes and 5% distance) and sorts fastest first. */
+/** Drops near-duplicates (within 90 seconds and 4% distance) and sorts fastest first. */
 export function dedupe(routes: RouteOption[]): RouteOption[] {
   const sorted = [...routes].sort((a, b) => a.durationS - b.durationS);
   const fastest = sorted.find((r) => r.style === 'fastest');
   const out: RouteOption[] = [];
   for (const r of sorted) {
-    // A "fun" route that's really just the fast way isn't worth listing.
-    if (r.style !== 'fastest' && fastest && r.durationS < fastest.durationS * 1.06) continue;
+    // A "fun" route that's really just the quick way isn't worth listing.
+    if (r.style !== 'fastest' && fastest && r.durationS < fastest.durationS + 60) continue;
     const twin = out.find(
-      (o) => Math.abs(o.durationS - r.durationS) < 120 && Math.abs(o.distanceM - r.distanceM) < Math.max(o.distanceM, r.distanceM) * 0.05,
+      (o) => Math.abs(o.durationS - r.durationS) < 90 && Math.abs(o.distanceM - r.distanceM) < Math.max(o.distanceM, r.distanceM) * 0.04,
     );
     if (twin) continue;
     out.push(r);
@@ -283,6 +580,13 @@ export function dedupe(routes: RouteOption[]): RouteOption[] {
 
 // ---- Surprise destinations --------------------------------------------------
 
+const SCENIC_MAKI = new Set(['park', 'garden', 'viewpoint', 'beach', 'mountain', 'natural', 'picnic-site', 'campsite', 'golf', 'marine-terminal', 'harbor', 'water', 'wetland']);
+const LANDMARK_MAKI = new Set([
+  'monument', 'museum', 'castle', 'attraction', 'landmark', 'art-gallery', 'theatre', 'town-hall',
+  'religious-christian', 'religious-jewish', 'religious-muslim', 'religious-buddhist', 'lighthouse',
+  'stadium', 'zoo', 'aquarium', 'amusement-park', 'observation-tower', 'historic',
+]);
+const STREET_CLASSES = new Set(['street', 'street_limited', 'tertiary', 'secondary']);
 const SURPRISE_MAKI = new Set([...SCENIC_MAKI, ...LANDMARK_MAKI, 'cafe', 'ice-cream', 'bakery', 'restaurant', 'fast-food', 'bar', 'shop']);
 
 /**
