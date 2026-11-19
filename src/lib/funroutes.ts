@@ -27,7 +27,7 @@ export interface RoadRules {
 
 export const NO_RULES: RoadRules = { noFreeways: false, noHighways: false };
 
-export type ViaKind = 'street' | 'culdesac' | 'odd';
+export type ViaKind = 'street' | 'main' | 'culdesac' | 'odd';
 
 export interface Via {
   coord: LngLat;
@@ -214,6 +214,13 @@ export function isQuietStreet(f: Pick<NearbyFeature, 'layer' | 'cls' | 'type'>):
   return f.layer === 'road' && QUIET_STREETS.has(f.cls) && !NOT_REAL_STREETS.has(f.type);
 }
 
+const MAIN_STREETS = new Set(['primary', 'secondary', 'tertiary']);
+
+/** A different main street to swing over to (not a freeway or highway on-ramp). */
+export function isMainStreet(f: Pick<NearbyFeature, 'layer' | 'cls' | 'type'>): boolean {
+  return f.layer === 'road' && MAIN_STREETS.has(f.cls) && !/link/.test(f.type);
+}
+
 export function isCulDeSac(f: Pick<NearbyFeature, 'layer' | 'cls'>): boolean {
   return f.layer === 'road' && CUL_DE_SAC.has(f.cls);
 }
@@ -229,84 +236,81 @@ export interface Candidate extends Via {
 // ---- Picking spots -----------------------------------------------------------
 
 export interface Level {
-  /** How far from the main route spots may be, in meters. */
-  reach: number;
-  /** Share of the trip spent weaving through neighborhood pockets (0..1). */
-  coverage: number;
-  /** Cul-de-sacs per 10 km of trip, and at least this many. */
+  /** How far the route swings to each side of the quick way, in meters. */
+  amplitude: number;
+  /** Distance along the trip for one full swing up and back down, in meters. */
+  wavelength: number;
+  /** Spots are about this far apart along the trip. Close enough that a main road is never a shortcut between two. */
+  spacing: number;
+  /** Longest stretch without a turn before a side street is added there. */
+  maxStraight: number;
   culPer10km: number;
   minCul: number;
   maxCul: number;
-  /** At most this many spots, so long trips stay sensible. */
+  /** At most this many spots, so very long trips stay sensible. */
   maxSpots: number;
   odds: number;
   title: string;
 }
 
 export const LEVELS: Level[] = [
-  { reach: 400, coverage: 0.3, culPer10km: 1, minCul: 1, maxCul: 2, maxSpots: 16, odds: 1, title: 'A few side streets' },
-  { reach: 500, coverage: 0.45, culPer10km: 2, minCul: 1, maxCul: 4, maxSpots: 26, odds: 1, title: 'Side-street wander' },
-  { reach: 650, coverage: 0.65, culPer10km: 3, minCul: 2, maxCul: 6, maxSpots: 40, odds: 2, title: 'Neighborhood weave' },
-  { reach: 800, coverage: 0.85, culPer10km: 5, minCul: 2, maxCul: 9, maxSpots: 55, odds: 2, title: 'Deep weave' },
-  { reach: 950, coverage: 1, culPer10km: 7, minCul: 3, maxCul: 12, maxSpots: 70, odds: 3, title: 'The long weave' },
+  { amplitude: 450, wavelength: 3200, spacing: 300, maxStraight: 800, culPer10km: 1, minCul: 1, maxCul: 3, maxSpots: 70, odds: 1, title: 'A few side streets' },
+  { amplitude: 650, wavelength: 2800, spacing: 250, maxStraight: 650, culPer10km: 2, minCul: 1, maxCul: 5, maxSpots: 100, odds: 1, title: 'Side-street wander' },
+  { amplitude: 900, wavelength: 2500, spacing: 210, maxStraight: 500, culPer10km: 3, minCul: 2, maxCul: 7, maxSpots: 140, odds: 2, title: 'Neighborhood zigzag' },
+  { amplitude: 1150, wavelength: 2300, spacing: 180, maxStraight: 400, culPer10km: 5, minCul: 2, maxCul: 10, maxSpots: 180, odds: 2, title: 'Deep zigzag' },
+  { amplitude: 1400, wavelength: 2100, spacing: 150, maxStraight: 320, culPer10km: 7, minCul: 3, maxCul: 14, maxSpots: 230, odds: 3, title: 'Every nook' },
 ];
 
-/**
- * Spots inside a pocket are about this far apart. Close enough that ducking
- * back out to the main road between two of them is never quicker, so the
- * route stays on the side streets.
- */
-export const SPOT_SPACING = 260;
-/** Spots closer than this to the main route just touch the corner of a side street. */
+/** Spots closer than this to the quick way just touch the corner of a side street. */
 const MIN_REACH = 90;
 
-/** Stretches of the trip to weave through, alternating sides: [start, end, side, depth]. */
-export function pocketsFor(tripM: number, level: Level, rand: () => number): [number, number, number, number][] {
-  const lo = tripM * 0.04;
-  const hi = tripM * 0.96;
-  const span = hi - lo;
-  const len = Math.min(2500, Math.max(900, tripM * 0.12));
-  const coverage = Math.min(level.coverage, (level.maxSpots * SPOT_SPACING) / span);
-  const count = Math.max(1, Math.round((span * coverage) / len));
-  const pocket = Math.min(len, span / count);
-  const gap = (span - pocket * count) / (count + 1);
-  const out: [number, number, number, number][] = [];
-  let side = rand() < 0.5 ? 1 : -1;
-  for (let i = 0; i < count; i++) {
-    const a = lo + gap * (i + 1) + pocket * i;
-    // How deep into the neighborhood this pocket runs.
-    const depth = Math.max(180, level.reach * (0.4 + rand() * 0.45));
-    out.push([a, a + pocket, side, depth]);
-    side = -side;
-  }
-  return out;
+/**
+ * Where the route should be, sideways, at a point along the trip: a zigzag
+ * that swings out to one side, back across the quick way, out to the other
+ * side and so on. It eases in near the start and out near the end, so the
+ * route leaves and arrives on the quick way. Signed meters, + = left.
+ */
+export function swingAt(along: number, tripM: number, level: Level, phase: number): number {
+  const ramp = Math.min(1, along / 700, (tripM - along) / 700);
+  if (ramp <= 0) return 0;
+  const t = along / level.wavelength + phase;
+  const tri = 1 - 4 * Math.abs(t - Math.floor(t + 0.5)); // -1..1 triangle wave
+  return Math.max(-1, Math.min(1, tri * 1.25)) * level.amplitude * ramp; // flattened peaks: ride the far main street a bit
 }
 
 /**
- * Chooses the spots for one route, in order along the way. Each pocket is a
- * stretch of the trip where the route leaves the main road and winds through
- * the neighborhood on one side, with a spot every ~450 m; pockets alternate
- * sides. Some spots are cul-de-sacs or odd spots instead of plain streets.
+ * Chooses the spots for one route, in order along the way. Every
+ * `spacing` meters there's a target point on the zigzag; the spot is the
+ * candidate closest to it. Near the peaks of the zigzag it prefers a main
+ * street (so the route comes out onto a different main road for a while);
+ * elsewhere residential streets. Some spots are cul-de-sacs or odd spots.
  */
 export function pickSpots(candidates: Candidate[], tripM: number, level: Level, rand: () => number): Candidate[] {
-  const pockets = pocketsFor(tripM, level, rand);
-  const bins: { lo: number; hi: number; side: number; depth: number; pool: Candidate[] }[] = [];
-  for (const [a, b, side, depth] of pockets) {
-    const n = Math.max(1, Math.round((b - a) / SPOT_SPACING));
-    const w = (b - a) / n;
-    for (let i = 0; i < n; i++) bins.push({ lo: a + w * i, hi: a + w * (i + 1), side, depth, pool: [] });
+  const lo = tripM * 0.03;
+  const hi = tripM * 0.97;
+  const spacing = Math.max(level.spacing, (hi - lo) / level.maxSpots);
+  const n = Math.max(2, Math.round((hi - lo) / spacing));
+  const step = (hi - lo) / n;
+  const phase = rand() < 0.5 ? 0.25 : 0.75; // start by swinging left or right
+  const bins: { at: number; target: number; peak: boolean; pool: Candidate[] }[] = [];
+  for (let i = 0; i < n; i++) {
+    const at = lo + step * (i + 0.5);
+    const target = swingAt(at, tripM, level, phase);
+    bins.push({ at, target, peak: Math.abs(target) > level.amplitude * 0.85, pool: [] });
   }
   for (const c of candidates) {
-    const reach = Math.abs(c.side);
-    if (c.kind === 'odd' ? reach > Math.min(level.reach, 400) : reach < MIN_REACH || reach > level.reach) continue;
-    const bin = bins.find((b) => c.along >= b.lo && c.along < b.hi);
-    if (bin) bin.pool.push(c);
+    const i = Math.floor((c.along - lo) / step);
+    if (i < 0 || i >= n) continue;
+    if (c.kind !== 'odd' && Math.abs(c.side) < MIN_REACH) continue;
+    if (Math.abs(c.side) > level.amplitude * 1.3 + 200) continue;
+    bins[i].pool.push(c);
   }
 
-  // Which spots are cul-de-sacs or odd spots.
+  // Which spots are cul-de-sacs or odd spots: only where one sits near the zigzag.
+  const near = (b: (typeof bins)[number], c: Candidate) => Math.abs(c.side - b.target) < Math.max(250, level.amplitude * 0.35);
   const special = new Map<number, ViaKind>();
   const assign = (kind: ViaKind, count: number) => {
-    const open = bins.map((_, i) => i).filter((i) => !special.has(i) && bins[i].pool.some((c) => c.kind === kind));
+    const open = bins.map((_, i) => i).filter((i) => !special.has(i) && bins[i].pool.some((c) => c.kind === kind && near(bins[i], c)));
     shuffle(open, rand);
     for (const i of open.slice(0, count)) special.set(i, kind);
   };
@@ -315,29 +319,51 @@ export function pickSpots(candidates: Candidate[], tripM: number, level: Level, 
 
   const picked: Candidate[] = [];
   bins.forEach((bin, i) => {
-    const want = special.get(i) ?? 'street';
-    let pool = bin.pool.filter((c) => c.kind === want);
-    if (!pool.length) pool = bin.pool.filter((c) => c.kind === 'street');
+    const want: ViaKind = special.get(i) ?? (bin.peak ? 'main' : 'street');
+    let pool = bin.pool.filter((c) => c.kind === want && near(bin, c));
+    if (!pool.length && want === 'main') pool = bin.pool.filter((c) => c.kind === 'street' && near(bin, c));
+    if (!pool.length) pool = bin.pool.filter((c) => (c.kind === 'street' || c.kind === 'main') && near(bin, c));
     if (!pool.length) return;
-    const onSide = pool.filter((c) => Math.sign(c.side) === bin.side || c.kind === 'odd');
-    if (onSide.length) pool = onSide;
-    else if (!pool.every((c) => c.kind === 'culdesac')) return; // only cross the main road for a cul-de-sac
-    // Plain streets stay at about the pocket's depth, so the route runs along
-    // inside the neighborhood instead of bouncing in and out of it.
-    if (want === 'street') {
-      const steady = pool.filter((c) => Math.abs(Math.abs(c.side) - bin.depth) < 160);
-      if (steady.length) pool = steady;
-    }
-    const choice = weightedPick(pool, (c) => (c.isNew ? 3 : 1), rand);
+    // Closest to the zigzag wins, new streets get a head start.
+    const scored = pool
+      .map((c) => ({ c, score: Math.abs(c.side - bin.target) - (c.isNew ? 120 : 0) + rand() * 90 }))
+      .sort((a, b) => a.score - b.score);
+    const choice = scored[0].c;
     const last = picked[picked.length - 1];
     if (last && distance(last.coord, choice.coord) < 110) {
       // Too close to the previous spot: a cul-de-sac or odd spot wins over a plain street.
-      if (choice.kind === 'street' || last.kind !== 'street') return;
+      if (choice.kind === 'street' || choice.kind === 'main' || last.kind === 'culdesac' || last.kind === 'odd') return;
       picked.pop();
     }
     picked.push(choice);
   });
   return picked.sort((a, b) => a.along - b.along);
+}
+
+/**
+ * Long stretches without a turn: points along any step longer than
+ * `maxStraight`, where a side street should be added. Skips the first and
+ * last bit of the trip.
+ */
+export function straightStretches(steps: Step[], maxStraight: number, tripM: number): LngLat[] {
+  const out: LngLat[] = [];
+  let done = 0;
+  for (const s of steps) {
+    const c = s.geometry?.coordinates ?? [];
+    const startAt = done;
+    done += s.distance;
+    if (s.distance <= maxStraight || c.length < 2) continue;
+    const cum = cumulative(c);
+    const len = cum[cum.length - 1];
+    const pieces = Math.floor(len / (maxStraight * 0.85));
+    for (let k = 1; k <= pieces; k++) {
+      const m = (len * k) / (pieces + 1);
+      const absolute = startAt + m;
+      if (absolute < 400 || absolute > tripM - 400) continue;
+      out.push(pointAlong(c, cum, m).at);
+    }
+  }
+  return out;
 }
 
 function shuffle<T>(a: T[], rand: () => number) {
@@ -400,6 +426,28 @@ export function highwayBlockPoints(steps: Step[], every = 300): LngLat[] {
   return out;
 }
 
+// Mapbox allows a few hundred route requests a minute; keep a handful in flight and back off when told to.
+let inFlight = 0;
+const waiting: (() => void)[] = [];
+async function slot<T>(work: () => Promise<T>): Promise<T> {
+  if (inFlight >= 6) await new Promise<void>((resolve) => waiting.push(resolve));
+  inFlight++;
+  try {
+    return await work();
+  } finally {
+    inFlight--;
+    waiting.shift()?.();
+  }
+}
+
+async function fetchWithRetry(url: string): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await slot(() => fetch(url));
+    if (res.status !== 429 || attempt >= 3) return res;
+    await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+  }
+}
+
 async function directions(points: LngLat[], noFreeways: boolean, blocked: LngLat[], continueStraight: boolean): Promise<DirectionsResult | null> {
   if (points.length < 2) return null;
   const params = new URLSearchParams({
@@ -417,7 +465,7 @@ async function directions(points: LngLat[], noFreeways: boolean, blocked: LngLat
   ];
   const path = points.map((p) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`).join(';');
   const excludeParam = exclude.length ? `&exclude=${encodeURIComponent(exclude.join(','))}` : '';
-  const res = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${path}?${params}${excludeParam}`);
+  const res = await fetchWithRetry(`https://api.mapbox.com/directions/v5/mapbox/driving/${path}?${params}${excludeParam}`);
   if (!res.ok) return null;
   const body = await res.json();
   const route = body?.routes?.[0];
@@ -488,7 +536,7 @@ export function stubSpots(coords: LngLat[], via: Via[]): Set<number> {
       if (d > bd + 3000) break;
     }
     from = best;
-    if (v.kind !== 'street') return;
+    if (v.kind !== 'street' && v.kind !== 'main') return;
     const back = pointAlong(coords, cum, cum[best] - 120).at;
     const fwd = pointAlong(coords, cum, cum[best] + 120).at;
     if (distance(back, fwd) < 40) out.add(k);
@@ -512,16 +560,18 @@ async function inBatches<T>(jobs: (() => Promise<T>)[], size: number): Promise<T
 export async function gatherCandidates(base: LngLat[], visited: VisitedStreets | null): Promise<Candidate[]> {
   const cum = cumulative(base);
   const len = cum[cum.length - 1];
-  const stepM = Math.min(1300, Math.max(450, len / 20));
-  const offset = 480;
+  const stepM = Math.min(1000, Math.max(400, len / 24));
   const jobs: (() => Promise<NearbyFeature[]>)[] = [];
   let k = 0;
   for (let m = Math.min(300, len / 2); m < len - 150; m += stepM, k++) {
     const { at, heading } = pointAlong(base, cum, m);
+    // Two rings each side: close in, and out where the zigzag swings to the next main streets.
     for (const side of [-90, 90]) {
-      const c = destinationPoint(at, heading + side, offset);
-      jobs.push(() => nearby(c, Math.max(560, stepM * 0.7), ['road'], 50, { geometry: 'linestring' }).catch(() => []));
-      jobs.push(() => nearby(c, Math.max(600, stepM * 0.75), ['road'], 50, { geometry: 'point', dedupe: false }).catch(() => []));
+      for (const [offset, radius] of [[450, Math.max(560, stepM * 0.7)], [1250, Math.max(650, stepM * 0.75)]]) {
+        const c = destinationPoint(at, heading + side, offset);
+        jobs.push(() => nearby(c, radius, ['road'], 50, { geometry: 'linestring' }).catch(() => []));
+        if (offset < 1000 || k % 2 === 0) jobs.push(() => nearby(c, radius * 1.05, ['road'], 50, { geometry: 'point', dedupe: false }).catch(() => []));
+      }
     }
     if (k % 2 === 0) jobs.push(() => nearby(at, Math.max(450, stepM * 0.8), ['poi_label'], 40).catch(() => []));
   }
@@ -530,7 +580,7 @@ export async function gatherCandidates(base: LngLat[], visited: VisitedStreets |
   const out: Candidate[] = [];
   const seen = new Set<string>();
   for (const f of found) {
-    const kind: ViaKind | null = isCulDeSac(f) ? 'culdesac' : isQuietStreet(f) ? 'street' : isOddSpot(f) ? 'odd' : null;
+    const kind: ViaKind | null = isCulDeSac(f) ? 'culdesac' : isQuietStreet(f) ? 'street' : isMainStreet(f) ? 'main' : isOddSpot(f) ? 'odd' : null;
     if (!kind) continue;
     const key = `${kind}:${f.coord[0].toFixed(4)},${f.coord[1].toFixed(4)}`;
     if (seen.has(key)) continue;
@@ -635,8 +685,40 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
             r = again;
           }
         }
+        // No long straight shots: wherever the route runs too far without a
+        // turn, add the nearest side street there and route again (twice at most).
+        for (let pass = 0; pass < 2; pass++) {
+          const gaps = straightStretches(r.steps, level.maxStraight, r.distanceM);
+          if (!gaps.length) break;
+          const used = new Set(spots);
+          const extra: Candidate[] = [];
+          for (const g of gaps) {
+            let best: Candidate | null = null;
+            let bestScore = Infinity;
+            for (const c of candidates) {
+              if (used.has(c) || (c.kind !== 'street' && c.kind !== 'culdesac')) continue;
+              const d = distance(g, c.coord);
+              if (d < 120 || d > 700) continue;
+              const score = d - (c.isNew ? 100 : 0);
+              if (score < bestScore) {
+                bestScore = score;
+                best = c;
+              }
+            }
+            if (best) {
+              used.add(best);
+              extra.push(best);
+            }
+          }
+          if (!extra.length) break;
+          const more = [...spots, ...extra].sort((a, b) => a.along - b.along);
+          const again = await routeThrough([origin, ...more.map((s) => s.coord), dest], rules).catch(() => null);
+          if (!again) break;
+          spots = more;
+          r = again;
+        }
         // A route that wandered off far beyond what was asked isn't fun, it's broken.
-        if (r.durationS > base.durationS * 4 && r.durationS > base.durationS + 45 * 60) return null;
+        if (r.durationS > base.durationS * 5 && r.durationS > base.durationS + 90 * 60) return null;
         const via = spots.map(({ coord, kind, name }) => ({ coord, kind, name }));
         const passes = [...new Set(spots.filter((s) => s.kind === 'odd').map((s) => s.name))].slice(0, 2);
         const culDeSacs = spots.filter((s) => s.kind === 'culdesac').length;

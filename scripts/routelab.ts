@@ -15,11 +15,9 @@ const uptownWhittier: LngLat = [-118.0328, 33.9792];
 const ANY = { noFreeways: false, noHighways: false };
 const NONE = { noFreeways: true, noHighways: true };
 const TRIPS: { name: string; to: LngLat; rules: RoadRules; cs: boolean }[] = [
-  { name: 'la-habra', to: [-117.9462, 33.9319], rules: ANY, cs: false },
+  { name: 'walnut', to: [-117.8653, 34.0203], rules: { noFreeways: true, noHighways: false }, cs: false },
   { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: ANY, cs: false },
-  { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: NONE, cs: false },
-  { name: 'hacienda-heights', to: [-117.9687, 33.9931], rules: ANY, cs: false },
-  { name: 'laguna-beach', to: [-117.7831, 33.5427], rules: NONE, cs: false },
+  { name: 'la-habra', to: [-117.9462, 33.9319], rules: ANY, cs: false },
 ];
 
 let seed = 7;
@@ -164,6 +162,10 @@ async function main() {
         k++;
         const check = await routeThrough([uptownWhittier, ...r.via.map((v) => v.coord), trip.to], rules);
         const steps = (check as any)?.steps ?? [];
+        const longest = Math.max(0, ...steps.map((st: any) => st.distance));
+        const longOnes = steps.filter((st: any) => st.distance > 805).length;
+        const mains = new Set(r.via.filter((v) => v.kind === 'main').map((v) => v.name).filter(Boolean));
+        const turns = steps.length;
         const fwy = steps.filter((s: any) => (s.intersections ?? []).some((x: any) => x.classes?.includes('motorway'))).reduce((a: number, s: any) => a + s.distance, 0);
         const hwy = r.highwayM;
         const m = await matched(r.coords);
@@ -174,7 +176,8 @@ async function main() {
           `${String(k).padStart(2)}. ${min(r.durationS).padStart(7)} ${mi(r.distanceM).padStart(8)}  L${r.level} ${r.title} — ${r.blurb}` +
             `\n      spots ${r.via.length} (cul-de-sacs driven ${culsDriven}/${r.culDeSacs}, kept by matching ${culsKept})` +
             ` · freeway ${mi(fwy)} · highway ${mi(hwy)}${r.usesHighway ? ' (flagged)' : ''}` +
-            ` · street U-turns ${uTurnsAtStreets(r)} · nav match ${(cov * 100).toFixed(0)}%`,
+            ` · street U-turns ${uTurnsAtStreets(r)} · nav match ${(cov * 100).toFixed(0)}%` +
+            `\n      turns ${turns} · longest straight ${mi(longest)} · stretches over ½ mi: ${longOnes} · other main streets ${mains.size} (${[...mains].slice(0, 4).join(', ')})`,
         );
         await draw(path.join(OUT, `${tag}-${String(k).padStart(2, '0')}-L${r.level}.png`), r, r.style === 'fastest' ? null : base);
       }
