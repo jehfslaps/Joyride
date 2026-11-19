@@ -335,7 +335,7 @@ export default function FunRoutesScreen() {
                     <View style={{ flex: 1, gap: 2 }}>
                       <Text style={t.bodyStrong}>{item.title}</Text>
                       <Text style={t.caption} numberOfLines={2}>
-                        {secret ? describe([], item.culDeSacs, []) : item.blurb}
+                        {secret ? (item.style === 'fastest' ? 'The quickest way' : describe([], item.culDeSacs, [])) : item.blurb}
                       </Text>
                       <Text style={[t.caption, { color: p.text3 }]} numberOfLines={1}>
                         {secret ? 'Mystery route' : formatMiles(item.distanceM)}
