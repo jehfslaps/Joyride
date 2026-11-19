@@ -15,7 +15,7 @@ const uptownWhittier: LngLat = [-118.0328, 33.9792];
 const ANY = { noFreeways: false, noHighways: false };
 const NONE = { noFreeways: true, noHighways: true };
 const TRIPS: { name: string; to: LngLat; rules: RoadRules; cs: boolean }[] = [
-  { name: 'costco-la-habra', to: [-117.948, 33.9335], rules: ANY, cs: false },
+  { name: 'costco-la-habra', to: [0, 0], address: '101 N Beach Blvd, La Habra, CA 90631', rules: ANY, cs: false } as any,
   { name: 'walnut', to: [-117.8653, 34.0203], rules: { noFreeways: true, noHighways: false }, cs: false },
   { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: ANY, cs: false },
   { name: 'la-habra', to: [-117.9462, 33.9319], rules: ANY, cs: false },
@@ -149,7 +149,13 @@ const mi = (m: number) => `${(m / 1609.344).toFixed(1)} mi`;
 
 async function main() {
   if (!TOKEN) throw new Error('No Mapbox token');
-  for (const trip of TRIPS) {
+  for (const trip of TRIPS as any[]) {
+    if (trip.address) {
+      const q = new URLSearchParams({ q: trip.address, limit: '1', country: 'us', access_token: TOKEN });
+      const body: any = await (await fetch(`https://api.mapbox.com/search/geocode/v6/forward?${q}`)).json();
+      trip.to = body.features[0].geometry.coordinates;
+      log(`(${trip.address} → ${trip.to[1].toFixed(5)}, ${trip.to[0].toFixed(5)})`);
+    }
     {
       const rules = trip.rules;
       setContinueStraight(trip.cs);
