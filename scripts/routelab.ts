@@ -5,18 +5,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cumulative, distance, project, thin, type LngLat } from '../src/lib/geo';
-import { buildFunRoutes, isHighwayStep, routeWithRules, type RoadRules, type RouteOption } from '../src/lib/funroutes';
+import { buildFunRoutes, routeThrough, setContinueStraight, type RoadRules, type RouteOption } from '../src/lib/funroutes';
 
 const TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? '';
 const OUT = process.argv[2] ?? 'out';
 fs.mkdirSync(OUT, { recursive: true });
 
 const uptownWhittier: LngLat = [-118.0328, 33.9792];
-const TRIPS: { name: string; to: LngLat; rules: RoadRules[] }[] = [
-  { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: [{ noFreeways: false, noHighways: false }, { noFreeways: true, noHighways: true }] },
-  { name: 'la-habra', to: [-117.9462, 33.9319], rules: [{ noFreeways: false, noHighways: false }] },
-  { name: 'hacienda-heights', to: [-117.9687, 33.9931], rules: [{ noFreeways: false, noHighways: false }] },
-  { name: 'laguna-beach', to: [-117.7831, 33.5427], rules: [{ noFreeways: true, noHighways: false }, { noFreeways: true, noHighways: true }] },
+const ANY = { noFreeways: false, noHighways: false };
+const NONE = { noFreeways: true, noHighways: true };
+const TRIPS: { name: string; to: LngLat; rules: RoadRules; cs: boolean }[] = [
+  { name: 'la-habra', to: [-117.9462, 33.9319], rules: ANY, cs: false },
+  { name: 'la-habra', to: [-117.9462, 33.9319], rules: ANY, cs: true },
+  { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: ANY, cs: false },
+  { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: ANY, cs: true },
+  { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: NONE, cs: false },
+  { name: 'hacienda-heights', to: [-117.9687, 33.9931], rules: ANY, cs: false },
+  { name: 'laguna-beach', to: [-117.7831, 33.5427], rules: NONE, cs: false },
 ];
 
 let seed = 7;
@@ -123,12 +128,12 @@ function simplified(coords: LngLat[], budget: number): string {
 
 async function draw(file: string, r: RouteOption, base: LngLat[] | null) {
   const overlays: string[] = [];
-  if (base) overlays.push(`path-4+7a7f8a-0.6(${encodeURIComponent(simplified(base, 1200))})`);
-  overlays.push(`path-5+ff7a00-0.95(${encodeURIComponent(simplified(r.coords, base ? 4200 : 5600))})`);
+  if (base) overlays.push(`path-4+7a7f8a-0.6(${encodeURIComponent(simplified(base, 600))})`);
+  overlays.push(`path-5+ff7a00-0.95(${encodeURIComponent(simplified(r.coords, 3000))})`);
   for (const v of r.via.filter((x) => x.kind !== 'street').slice(0, 12)) {
     overlays.push(`pin-s-${v.kind === 'culdesac' ? 'c' : 'star'}+${v.kind === 'culdesac' ? 'd6336c' : '2f9e44'}(${v.coord[0].toFixed(5)},${v.coord[1].toFixed(5)})`);
   }
-  for (const v of r.via.filter((x) => x.kind === 'street').slice(0, 20)) {
+  for (const v of r.via.filter((x) => x.kind === 'street').slice(0, 10)) {
     overlays.push(`pin-s+1c7ed6(${v.coord[0].toFixed(5)},${v.coord[1].toFixed(5)})`);
   }
   const url = `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${overlays.join(',')}/auto/700x700@2x?padding=40&access_token=${TOKEN}`;
@@ -148,8 +153,10 @@ const mi = (m: number) => `${(m / 1609.344).toFixed(1)} mi`;
 async function main() {
   if (!TOKEN) throw new Error('No Mapbox token');
   for (const trip of TRIPS) {
-    for (const rules of trip.rules) {
-      const tag = `${trip.name}${rules.noFreeways ? '-nofwy' : ''}${rules.noHighways ? '-nohwy' : ''}`;
+    {
+      const rules = trip.rules;
+      setContinueStraight(trip.cs);
+      const tag = `${trip.name}${rules.noFreeways ? '-nofwy' : ''}${rules.noHighways ? '-nohwy' : ''}${trip.cs ? '-cs' : ''}`;
       const t0 = Date.now();
       const routes = await buildFunRoutes(uptownWhittier, trip.to, { rules, rand });
       log(`\n=== ${tag}: ${routes.length} routes in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
@@ -157,10 +164,10 @@ async function main() {
       let k = 0;
       for (const r of routes) {
         k++;
-        const check = await routeWithRules([uptownWhittier, ...r.via.map((v) => v.coord), trip.to], rules);
+        const check = await routeThrough([uptownWhittier, ...r.via.map((v) => v.coord), trip.to], rules);
         const steps = (check as any)?.steps ?? [];
         const fwy = steps.filter((s: any) => (s.intersections ?? []).some((x: any) => x.classes?.includes('motorway'))).reduce((a: number, s: any) => a + s.distance, 0);
-        const hwy = steps.filter(isHighwayStep).reduce((a: number, s: any) => a + s.distance, 0);
+        const hwy = r.highwayM;
         const m = await matched(r.coords);
         const cov = coverage(r.coords, m);
         const culsKept = r.via.filter((v) => v.kind === 'culdesac' && (project(v.coord, m)?.offset ?? 1e9) < 40).length;

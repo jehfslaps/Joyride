@@ -54,6 +54,8 @@ export interface RouteOption {
   newShare: number | null;
   /** True when No highways is on but there was no way around one. */
   usesHighway: boolean;
+  /** Meters on highways (numbered state/US routes that aren't freeways). */
+  highwayM: number;
 }
 
 // ---- Pure geometry helpers (exported for tests) ---------------------------
@@ -187,22 +189,25 @@ export class VisitedStreets {
 const QUIET_STREETS = new Set(['street', 'street_limited']);
 const NOT_REAL_STREETS = new Set(['service', 'driveway', 'parking_aisle', 'alley', 'drive-through', 'emergency_access']);
 const CUL_DE_SAC = new Set(['turning_circle', 'turning_loop']);
-const ODD_CLASSES = new Set(['park_like', 'historic', 'landmark', 'arts_and_entertainment', 'visitor_amenities']);
 const ODD_MAKI = new Set([
   'park', 'garden', 'viewpoint', 'monument', 'museum', 'castle', 'attraction', 'landmark', 'art-gallery',
-  'observation-tower', 'historic', 'lighthouse', 'water', 'picnic-site', 'playground', 'theatre', 'town-hall',
-  'library', 'zoo', 'aquarium', 'golf', 'natural', 'waterfall', 'mountain', 'wetland',
+  'observation-tower', 'historic', 'lighthouse', 'water', 'picnic-site', 'natural', 'waterfall', 'mountain', 'wetland',
 ]);
 const BORING_MAKI = new Set([
   'shop', 'grocery', 'fast-food', 'fuel', 'car', 'car-repair', 'car-rental', 'parking', 'parking-garage',
   'bank', 'pharmacy', 'convenience', 'clothing-store', 'mobile-phone', 'hardware', 'laundry', 'dentist',
   'doctor', 'hospital', 'commercial', 'restaurant', 'cafe', 'bar', 'alcohol-shop', 'lodging', 'post',
+  'library', 'town-hall', 'school', 'college', 'police', 'fire-station', 'religious-christian', 'amusement-park',
+  'bowling-alley', 'cinema', 'casino', 'golf',
 ]);
+
+const DULL_NAMES = /\b(office|court|courthouse|library|welcome|parking|restroom|entrance|school|church|dmv|city hall|post|police|fire station|clinic|center)\b/i;
 
 export function isOddSpot(f: Pick<NearbyFeature, 'layer' | 'cls' | 'maki' | 'name'>): boolean {
   if (f.layer !== 'poi_label' || !f.name) return false;
-  if (BORING_MAKI.has(f.maki)) return false;
-  return ODD_CLASSES.has(f.cls) || ODD_MAKI.has(f.maki);
+  if (BORING_MAKI.has(f.maki) || DULL_NAMES.test(f.name)) return false;
+  if (f.cls === 'park_like' || f.cls === 'historic' || f.cls === 'landmark') return true;
+  return ODD_MAKI.has(f.maki);
 }
 
 export function isQuietStreet(f: Pick<NearbyFeature, 'layer' | 'cls' | 'type'>): boolean {
@@ -226,71 +231,92 @@ export interface Candidate extends Via {
 export interface Level {
   /** How far from the main route spots may be, in meters. */
   reach: number;
-  /** Spots per kilometer of trip. */
-  perKm: number;
-  minSpots: number;
-  culDeSacs: number;
+  /** Share of the trip spent weaving through neighborhood pockets (0..1). */
+  coverage: number;
+  /** Cul-de-sacs per 10 km of trip, and at least this many. */
+  culPer10km: number;
+  minCul: number;
   odds: number;
   title: string;
 }
 
 export const LEVELS: Level[] = [
-  { reach: 450, perKm: 0.3, minSpots: 2, culDeSacs: 1, odds: 1, title: 'A few side streets' },
-  { reach: 700, perKm: 0.5, minSpots: 3, culDeSacs: 2, odds: 1, title: 'Side-street wander' },
-  { reach: 1000, perKm: 0.75, minSpots: 4, culDeSacs: 3, odds: 2, title: 'Neighborhood weave' },
-  { reach: 1400, perKm: 1.05, minSpots: 6, culDeSacs: 4, odds: 2, title: 'Deep weave' },
-  { reach: 1900, perKm: 1.4, minSpots: 8, culDeSacs: 6, odds: 3, title: 'The long weave' },
+  { reach: 350, coverage: 0.3, culPer10km: 1, minCul: 1, odds: 1, title: 'A few side streets' },
+  { reach: 450, coverage: 0.45, culPer10km: 2, minCul: 1, odds: 1, title: 'Side-street wander' },
+  { reach: 600, coverage: 0.65, culPer10km: 3, minCul: 2, odds: 2, title: 'Neighborhood weave' },
+  { reach: 750, coverage: 0.85, culPer10km: 5, minCul: 2, odds: 2, title: 'Deep weave' },
+  { reach: 900, coverage: 1, culPer10km: 7, minCul: 3, odds: 3, title: 'The long weave' },
 ];
 
-/** Mapbox allows 25 points per route: start, end and 23 in between. */
-const MAX_SPOTS = 22;
+/** Spots inside a pocket are about this far apart, so the route stays on side streets between them. */
+export const SPOT_SPACING = 450;
 /** Spots closer than this to the main route just touch the corner of a side street. */
 const MIN_REACH = 90;
 
+/** Stretches of the trip to weave through, alternating sides: [start, end, side]. */
+export function pocketsFor(tripM: number, level: Level, rand: () => number): [number, number, number][] {
+  const lo = tripM * 0.04;
+  const hi = tripM * 0.96;
+  const span = hi - lo;
+  const len = Math.min(2500, Math.max(900, tripM * 0.12));
+  const count = Math.max(1, Math.round((span * level.coverage) / len));
+  const pocket = Math.min(len, span / count);
+  const gap = (span - pocket * count) / (count + 1);
+  const out: [number, number, number][] = [];
+  let side = rand() < 0.5 ? 1 : -1;
+  for (let i = 0; i < count; i++) {
+    const a = lo + gap * (i + 1) + pocket * i;
+    out.push([a, a + pocket, side]);
+    side = -side;
+  }
+  return out;
+}
+
 /**
- * Chooses the spots for one route, in order along the way. The trip is cut
- * into equal stretches and one spot is taken from each, alternating sides so
- * the route zig-zags; some stretches take a cul-de-sac or an odd spot instead.
+ * Chooses the spots for one route, in order along the way. Each pocket is a
+ * stretch of the trip where the route leaves the main road and winds through
+ * the neighborhood on one side, with a spot every ~450 m; pockets alternate
+ * sides. Some spots are cul-de-sacs or odd spots instead of plain streets.
  */
 export function pickSpots(candidates: Candidate[], tripM: number, level: Level, rand: () => number): Candidate[] {
-  const n = Math.max(level.minSpots, Math.min(MAX_SPOTS, Math.round((level.perKm * tripM) / 1000)));
-  const lo = tripM * 0.05;
-  const hi = tripM * 0.95;
-  const width = (hi - lo) / n;
-  const usable = candidates.filter((c) => {
+  const pockets = pocketsFor(tripM, level, rand);
+  const bins: { lo: number; hi: number; side: number; pool: Candidate[] }[] = [];
+  for (const [a, b, side] of pockets) {
+    const n = Math.max(1, Math.round((b - a) / SPOT_SPACING));
+    const w = (b - a) / n;
+    for (let i = 0; i < n; i++) bins.push({ lo: a + w * i, hi: a + w * (i + 1), side, pool: [] });
+  }
+  for (const c of candidates) {
     const reach = Math.abs(c.side);
-    const max = c.kind === 'odd' ? Math.min(level.reach, 450) : level.reach;
-    return c.along >= lo && c.along <= hi && reach >= (c.kind === 'odd' ? 0 : MIN_REACH) && reach <= max;
-  });
+    if (c.kind === 'odd' ? reach > Math.min(level.reach, 400) : reach < MIN_REACH || reach > level.reach) continue;
+    const bin = bins.find((b) => c.along >= b.lo && c.along < b.hi);
+    if (bin) bin.pool.push(c);
+  }
 
-  const bins: Candidate[][] = Array.from({ length: n }, () => []);
-  for (const c of usable) bins[Math.min(n - 1, Math.floor((c.along - lo) / width))].push(c);
-
-  // Which stretches get a cul-de-sac or an odd spot.
+  // Which spots are cul-de-sacs or odd spots.
   const special = new Map<number, ViaKind>();
   const assign = (kind: ViaKind, count: number) => {
-    const open = bins.map((b, i) => i).filter((i) => !special.has(i) && bins[i].some((c) => c.kind === kind));
+    const open = bins.map((_, i) => i).filter((i) => !special.has(i) && bins[i].pool.some((c) => c.kind === kind));
     shuffle(open, rand);
     for (const i of open.slice(0, count)) special.set(i, kind);
   };
-  assign('culdesac', level.culDeSacs);
+  assign('culdesac', Math.max(level.minCul, Math.round((level.culPer10km * tripM) / 10000)));
   assign('odd', level.odds);
 
   const picked: Candidate[] = [];
-  let side = rand() < 0.5 ? 1 : -1;
-  for (let i = 0; i < n; i++) {
+  bins.forEach((bin, i) => {
     const want = special.get(i) ?? 'street';
-    let pool = bins[i].filter((c) => c.kind === want);
-    if (!pool.length) pool = bins[i].filter((c) => c.kind === 'street');
-    if (!pool.length) continue;
-    const sameSide = pool.filter((c) => Math.sign(c.side) === side);
-    if (sameSide.length) pool = sameSide;
+    let pool = bin.pool.filter((c) => c.kind === want);
+    if (!pool.length) pool = bin.pool.filter((c) => c.kind === 'street');
+    if (!pool.length) return;
+    const onSide = pool.filter((c) => Math.sign(c.side) === bin.side || c.kind === 'odd');
+    if (onSide.length) pool = onSide;
+    else if (!pool.every((c) => c.kind === 'culdesac')) return; // only cross the main road for a cul-de-sac
     const choice = weightedPick(pool, (c) => (c.isNew ? 3 : 1), rand);
     const last = picked[picked.length - 1];
-    if (last && distance(last.coord, choice.coord) < 150) continue;
+    if (last && distance(last.coord, choice.coord) < 150) return;
     picked.push(choice);
-    side = choice.side >= 0 ? -1 : 1;
-  }
+  });
   return picked.sort((a, b) => a.along - b.along);
 }
 
@@ -354,17 +380,16 @@ export function highwayBlockPoints(steps: Step[], every = 300): LngLat[] {
   return out;
 }
 
-async function directions(points: LngLat[], noFreeways: boolean, blocked: LngLat[]): Promise<DirectionsResult | null> {
+async function directions(points: LngLat[], noFreeways: boolean, blocked: LngLat[], continueStraight: boolean): Promise<DirectionsResult | null> {
   if (points.length < 2) return null;
   const params = new URLSearchParams({
     access_token: MAPBOX_TOKEN,
     geometries: 'geojson',
     overview: 'full',
     steps: 'true',
-    // Spots shape the route without becoming stops, and the route may turn
-    // around at one (that's how a cul-de-sac works).
+    // Spots shape the route without becoming stops.
     waypoints: `0;${points.length - 1}`,
-    continue_straight: 'false',
+    continue_straight: continueStraight ? 'true' : 'false',
   });
   const exclude = [
     ...(noFreeways ? ['motorway'] : []),
@@ -382,11 +407,15 @@ async function directions(points: LngLat[], noFreeways: boolean, blocked: LngLat
 }
 
 /** A route through `points` that follows the switches, routing around highways when asked. */
-export async function routeWithRules(points: LngLat[], rules: RoadRules): Promise<(DirectionsResult & { usesHighway: boolean }) | null> {
+export async function routeWithRules(
+  points: LngLat[],
+  rules: RoadRules,
+  continueStraight = CONTINUE_STRAIGHT,
+): Promise<(DirectionsResult & { usesHighway: boolean }) | null> {
   let blocked: LngLat[] = [];
   let last: DirectionsResult | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const r = await directions(points, rules.noFreeways, blocked);
+    const r = await directions(points, rules.noFreeways, blocked, continueStraight);
     if (!r) break;
     last = r;
     if (!rules.noHighways) return { ...r, usesHighway: false };
@@ -396,6 +425,59 @@ export async function routeWithRules(points: LngLat[], rules: RoadRules): Promis
     blocked = [...blocked, ...more].slice(0, 45);
   }
   return last ? { ...last, usesHighway: rules.noHighways && highwayBlockPoints(last.steps).length > 0 } : null;
+}
+
+/** Whether the route must drive on past each spot (true) or may turn around at one. */
+export let CONTINUE_STRAIGHT = false;
+export function setContinueStraight(v: boolean) {
+  CONTINUE_STRAIGHT = v;
+}
+
+/** Mapbox takes 25 points per request, so long weaves are routed in pieces and joined. */
+export async function routeThrough(points: LngLat[], rules: RoadRules, continueStraight = CONTINUE_STRAIGHT) {
+  const pieces: LngLat[][] = [];
+  for (let i = 0; i < points.length - 1; i += 24) pieces.push(points.slice(i, Math.min(points.length, i + 25)));
+  const results = await Promise.all(pieces.map((p) => routeWithRules(p, rules, continueStraight)));
+  if (results.some((r) => !r)) return null;
+  const coords: LngLat[] = [];
+  for (const r of results) coords.push(...(coords.length ? r!.coords.slice(1) : r!.coords));
+  return {
+    durationS: results.reduce((a, r) => a + r!.durationS, 0),
+    distanceM: results.reduce((a, r) => a + r!.distanceM, 0),
+    coords,
+    steps: results.flatMap((r) => r!.steps),
+    usesHighway: results.some((r) => r!.usesHighway),
+  };
+}
+
+/** Street spots where the route only pokes in and turns straight back. */
+export function stubSpots(coords: LngLat[], via: Via[]): Set<number> {
+  const out = new Set<number>();
+  const cum = cumulative(coords);
+  let from = 0;
+  via.forEach((v, k) => {
+    // Nearest route point, searching forward so loops don't confuse it.
+    let best = from;
+    let bd = Infinity;
+    for (let i = from; i < coords.length; i++) {
+      const d = distance(coords[i], v.coord);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+      if (d > bd + 3000) break;
+    }
+    from = best;
+    if (v.kind !== 'street') return;
+    const back = pointAlong(coords, cum, cum[best] - 120).at;
+    const fwd = pointAlong(coords, cum, cum[best] + 120).at;
+    if (distance(back, fwd) < 40) out.add(k);
+  });
+  return out;
+}
+
+export function highwayMeters(steps: Step[]): number {
+  return steps.filter(isHighwayStep).reduce((a, s) => a + s.distance, 0);
 }
 
 // ---- Looking along the route ------------------------------------------------------
@@ -410,27 +492,20 @@ async function inBatches<T>(jobs: (() => Promise<T>)[], size: number): Promise<T
 export async function gatherCandidates(base: LngLat[], visited: VisitedStreets | null): Promise<Candidate[]> {
   const cum = cumulative(base);
   const len = cum[cum.length - 1];
-  const stepM = Math.min(3000, Math.max(450, len / 12));
-  const offset = Math.min(800, Math.max(300, stepM * 0.55));
+  const stepM = Math.min(1300, Math.max(450, len / 20));
+  const offset = 480;
   const jobs: (() => Promise<NearbyFeature[]>)[] = [];
   let k = 0;
   for (let m = Math.min(300, len / 2); m < len - 150; m += stepM, k++) {
     const { at, heading } = pointAlong(base, cum, m);
-    const centers: [LngLat, number][] = [
-      [destinationPoint(at, heading - 90, offset), offset],
-      [destinationPoint(at, heading + 90, offset), offset],
-    ];
-    if (k % 2 === 1 && len > 5000) {
-      centers.push([destinationPoint(at, heading - 90, offset * 2.3), offset * 1.2]);
-      centers.push([destinationPoint(at, heading + 90, offset * 2.3), offset * 1.2]);
+    for (const side of [-90, 90]) {
+      const c = destinationPoint(at, heading + side, offset);
+      jobs.push(() => nearby(c, Math.max(560, stepM * 0.7), ['road'], 50, { geometry: 'linestring' }).catch(() => []));
+      jobs.push(() => nearby(c, Math.max(600, stepM * 0.75), ['road'], 50, { geometry: 'point', dedupe: false }).catch(() => []));
     }
-    for (const [c, r] of centers) {
-      jobs.push(() => nearby(c, r, ['road'], 50, { geometry: 'linestring' }).catch(() => []));
-      jobs.push(() => nearby(c, r * 1.1, ['road'], 50, { geometry: 'point', dedupe: false }).catch(() => []));
-    }
-    jobs.push(() => nearby(at, 450, ['poi_label'], 30).catch(() => []));
+    if (k % 2 === 0) jobs.push(() => nearby(at, Math.max(450, stepM * 0.8), ['poi_label'], 40).catch(() => []));
   }
-  const found = (await inBatches(jobs, 8)).flat();
+  const found = (await inBatches(jobs, 10)).flat();
 
   const out: Candidate[] = [];
   const seen = new Set<string>();
@@ -515,6 +590,7 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
     culDeSacs: 0,
     newShare: visited?.newShare(base.coords) ?? null,
     usesHighway: base.usesHighway,
+    highwayM: highwayMeters(base.steps),
   });
 
   const candidates = await gatherCandidates(base.coords, visited);
@@ -525,10 +601,20 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
   LEVELS.forEach((level, li) => {
     for (let v = 0; v < variants; v++) {
       jobs.push(async () => {
-        const spots = pickSpots(candidates, base.distanceM, level, rand);
+        let spots = pickSpots(candidates, base.distanceM, level, rand);
         if (!spots.length) return null;
-        const r = await routeWithRules([origin, ...spots.map((s) => s.coord), dest], rules).catch(() => null);
+        let r = await routeThrough([origin, ...spots.map((s) => s.coord), dest], rules).catch(() => null);
         if (!r) return null;
+        // Drop spots the route only poked into and backed out of, and route again.
+        const stubs = stubSpots(r.coords, spots);
+        if (stubs.size) {
+          const kept = spots.filter((_, i) => !stubs.has(i));
+          const again = kept.length ? await routeThrough([origin, ...kept.map((s) => s.coord), dest], rules).catch(() => null) : null;
+          if (again) {
+            spots = kept;
+            r = again;
+          }
+        }
         // A route that wandered off far beyond what was asked isn't fun, it's broken.
         if (r.durationS > base.durationS * 4 && r.durationS > base.durationS + 45 * 60) return null;
         const via = spots.map(({ coord, kind, name }) => ({ coord, kind, name }));
@@ -550,6 +636,7 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
           culDeSacs,
           newShare: visited?.newShare(r.coords) ?? null,
           usesHighway: r.usesHighway,
+          highwayM: highwayMeters(r.steps),
         };
       });
     }
