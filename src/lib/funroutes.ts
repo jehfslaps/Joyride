@@ -15,8 +15,21 @@
 //  4. Streets the person has never recorded a drive on are preferred.
 
 import { MAPBOX_TOKEN } from '../config';
-import { cumulative, distance, project, type LngLat } from './geo';
+import { cumulative, distance, project, thin, type LngLat } from './geo';
 import { areaName, nearby, type NearbyFeature, type Place } from './places';
+import {
+  bandAround,
+  buildGraph,
+  fetchStreets,
+  findDips,
+  nearestNode,
+  pathCoords,
+  planRoute,
+  quickEdges,
+  streetRuns,
+  STYLES,
+  withDips,
+} from './streetgraph';
 
 export type RouteStyle = 'fastest' | 'weave';
 
@@ -56,6 +69,8 @@ export interface RouteOption {
   usesHighway: boolean;
   /** Meters on highways (numbered state/US routes that aren't freeways). */
   highwayM: number;
+  /** Street-by-street routes: the streets in order (for checking and labels). */
+  streets?: string[];
 }
 
 // ---- Pure geometry helpers (exported for tests) ---------------------------
@@ -459,6 +474,38 @@ async function fetchWithRetry(url: string): Promise<Response> {
   }
 }
 
+/**
+ * Drive time along an exact path, from Mapbox's map matching (the same way
+ * turn-by-turn will follow it). Null if Mapbox can't follow it.
+ */
+export async function timeAlong(coords: LngLat[]): Promise<{ durationS: number; distanceM: number } | null> {
+  const keep = thin(coords, 40).map((i) => coords[i]);
+  if (keep.length < 2) return null;
+  const pieces: LngLat[][] = [];
+  for (let i = 0; i < keep.length - 1; i += 99) pieces.push(keep.slice(i, Math.min(keep.length, i + 100)));
+  const results = await Promise.all(
+    pieces.map(async (piece) => {
+      if (piece.length < 2) return { d: 0, m: 0 };
+      const params = new URLSearchParams({
+        access_token: MAPBOX_TOKEN,
+        geometries: 'geojson',
+        overview: 'false',
+        radiuses: piece.map(() => '20').join(';'),
+        waypoints: `0;${piece.length - 1}`,
+      });
+      const path = piece.map((p) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`).join(';');
+      const res = await fetchWithRetry(`https://api.mapbox.com/matching/v5/mapbox/driving/${path}?${params}`);
+      if (!res.ok) return null;
+      const body = await res.json();
+      const ms: any[] = body?.matchings ?? [];
+      if (body?.code !== 'Ok' || !ms.length) return null;
+      return { d: ms.reduce((a, m) => a + (m.duration ?? 0), 0), m: ms.reduce((a, m) => a + (m.distance ?? 0), 0) };
+    }),
+  );
+  if (results.some((r) => !r)) return null;
+  return { durationS: results.reduce((a, r) => a + r!.d, 0), distanceM: results.reduce((a, r) => a + r!.m, 0) };
+}
+
 async function directions(points: LngLat[], noFreeways: boolean, blocked: LngLat[], continueStraight: boolean): Promise<DirectionsResult | null> {
   if (points.length < 2) return null;
   const params = new URLSearchParams({
@@ -666,6 +713,83 @@ async function neighborhoodsOn(spots: Via[], skip: Set<string>): Promise<string[
   return out.slice(0, 3);
 }
 
+// ---- Street-by-street routes ---------------------------------------------------------
+
+/**
+ * Fun routes planned street by street (see streetgraph.ts): real chains of
+ * connecting streets that keep heading toward the destination, two per style
+ * from "a few side streets" to "every nook", each a different combination.
+ */
+async function streetRoutes(
+  origin: LngLat,
+  dest: LngLat,
+  base: { coords: LngLat[]; distanceM: number; durationS: number },
+  opts: { rules: RoadRules; rand: () => number; visited: VisitedStreets | null; variants: number },
+  add: (r: RouteOption) => void,
+): Promise<number> {
+  const halfWidth = Math.min(2200, Math.max(1200, base.distanceM * 0.12));
+  const ways = await fetchStreets(bandAround(base.coords, halfWidth));
+  const g = buildGraph(ways);
+  const a = nearestNode(g, origin);
+  const b = nearestNode(g, dest);
+  if (a == null || b == null) return 0;
+  const quick = quickEdges(g, base.coords);
+  const quickNames = new Set([...quick].map((e) => g.edges[e].name).filter(Boolean));
+  const used = new Map<number, number>();
+  let made = 0;
+  const jobs: (() => Promise<void>)[] = [];
+  STYLES.forEach((style, si) => {
+    for (let v = 0; v < opts.variants; v++) {
+      const path = planRoute(g, a, b, style, quick, { noHighways: opts.rules.noHighways, rand: opts.rand, used });
+      if (!path || !path.length) continue;
+      for (const e of path) used.set(e, (used.get(e) ?? 0) + 1);
+      const dips = findDips(g, path, style.culDeSacs, opts.rand);
+      const full = withDips(path, dips);
+      const coords: LngLat[] = [origin, ...pathCoords(g, full), dest];
+      const runs = streetRuns(g, path);
+      // The streets worth naming: the bigger ones it switches onto, in order.
+      const via: string[] = [];
+      for (const r of runs) {
+        if (!r.name || r.len < 350 || via.includes(r.name) || quickNames.has(r.name)) continue;
+        if (r.cls === 'residential' || r.cls === 'living_street' || r.cls === 'link') continue;
+        via.push(r.name);
+      }
+      const turns = runs.length;
+      jobs.push(async () => {
+        const t = await timeAlong(coords).catch(() => null);
+        if (!t) return;
+        made++;
+        const smallStreets = runs.filter((r) => r.cls === 'residential' || r.cls === 'living_street' || r.cls === 'unclassified').length;
+        const parts: string[] = [];
+        if (via.length) parts.push(`Via ${joinNames(via.slice(0, 3))}`);
+        if (smallStreets) parts.push(`${smallStreets} little street${smallStreets === 1 ? '' : 's'}`);
+        if (dips.length) parts.push(`${dips.length} cul-de-sac${dips.length === 1 ? '' : 's'}`);
+        add({
+          id: `street-${si + 1}-${v}-${Math.round(t.durationS)}`,
+          style: 'weave',
+          level: si + 1,
+          title: style.title,
+          blurb: parts.join(' · ') || 'Winds through residential side streets',
+          durationS: t.durationS,
+          distanceM: t.distanceM,
+          coords,
+          via: dips.map((d) => ({ coord: d.tip, kind: 'culdesac' as const, name: '' })),
+          through: via,
+          passes: [],
+          culDeSacs: dips.length,
+          newShare: opts.visited?.newShare(coords) ?? null,
+          usesHighway: opts.rules.noHighways && path.some((e) => g.edges[e].highway),
+          highwayM: path.filter((e) => g.edges[e].highway).reduce((x, e) => x + g.edges[e].len, 0),
+          streets: runs.filter((r) => r.len >= 60).map((r) => r.name || '(unnamed)'),
+        });
+        void turns;
+      });
+    }
+  });
+  for (let i = 0; i < jobs.length; i += 3) await Promise.all(jobs.slice(i, i + 3).map((j) => j().catch(() => {})));
+  return made;
+}
+
 // ---- Building the menu ---------------------------------------------------------------
 
 export interface BuildOptions {
@@ -676,6 +800,8 @@ export interface BuildOptions {
   rand?: () => number;
   /** Routes per level (each a different random pick). */
   variants?: number;
+  /** Plan routes street by street (default), or only use the older spot-based weaving. */
+  streetByStreet?: boolean;
 }
 
 /**
@@ -713,6 +839,13 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
     usesHighway: base.usesHighway,
     highwayM: highwayMeters(base.steps),
   });
+
+  // First choice: plan routes street by street. If the street map can't be
+  // loaded, fall back to the older spot-based weaving below.
+  if (opts.streetByStreet !== false) {
+    const made = await streetRoutes(origin, dest, base, { rules, rand, visited, variants }, add).catch(() => 0);
+    if (made >= 2) return dedupe(found);
+  }
 
   const candidates = await gatherCandidates(base.coords, visited);
   const [fromArea, toArea] = await Promise.all([areaName(origin).catch(() => null), areaName(dest).catch(() => null)]);

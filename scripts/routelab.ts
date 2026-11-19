@@ -15,6 +15,7 @@ const uptownWhittier: LngLat = [-118.0328, 33.9792];
 const ANY = { noFreeways: false, noHighways: false };
 const NONE = { noFreeways: true, noHighways: true };
 const TRIPS: { name: string; to: LngLat; rules: RoadRules; cs: boolean }[] = [
+  { name: 'costco-la-habra', to: [-117.948, 33.9335], rules: ANY, cs: false },
   { name: 'walnut', to: [-117.8653, 34.0203], rules: { noFreeways: true, noHighways: false }, cs: false },
   { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: ANY, cs: false },
   { name: 'la-habra', to: [-117.9462, 33.9319], rules: ANY, cs: false },
@@ -179,6 +180,7 @@ async function main() {
             ` · street U-turns ${uTurnsAtStreets(r)} · nav match ${(cov * 100).toFixed(0)}%` +
             `\n      turns ${turns} · longest straight ${mi(longest)} · stretches over ½ mi: ${longOnes} · other main streets ${mains.size} (${[...mains].slice(0, 4).join(', ')})`,
         );
+        if (r.streets?.length) log(`      streets: ${r.streets.join(' → ')}`);
         await draw(path.join(OUT, `${tag}-${String(k).padStart(2, '0')}-L${r.level}.png`), r, r.style === 'fastest' ? null : base);
       }
     }

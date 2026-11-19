@@ -25,7 +25,9 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Unit tests
-        run: npx tsx tests/funroutes.test.ts
+        run: |
+          npx tsx tests/funroutes.test.ts
+          npx tsx tests/streetgraph.test.ts
       - name: Build and check routes
         env:
           EXPO_PUBLIC_MAPBOX_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
