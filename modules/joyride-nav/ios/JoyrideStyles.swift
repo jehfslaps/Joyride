@@ -269,7 +269,7 @@ final class JoyrideDayStyle: StandardDayStyle {
   }
 }
 
-/// Day in daylight, night after sunset (Mapbox switches automatically by the sun at your location).
+/// Day and night versions; the navigation screen picks by the phone's appearance.
 func joyrideStyles() -> [Style] {
   [JoyrideDayStyle(), JoyrideNightStyle()]
 }

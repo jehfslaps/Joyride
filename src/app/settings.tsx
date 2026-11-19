@@ -41,7 +41,7 @@ export default function Settings() {
         <GlassRow icon="shield-lock-outline" title="Privacy policy" onPress={() => Linking.openURL(PRIVACY_URL)} />
         <GlassRow icon="lifebuoy" title="Help and feedback" onPress={() => Linking.openURL(SUPPORT_URL)} />
         <GlassRow icon="information-outline" title="Show the welcome screen" onPress={() => router.push('/welcome')} />
-        <GlassRow icon="theme-light-dark" title="Light and dark" detail="Follows your iPhone’s appearance. Turn-by-turn switches at sunset." />
+        <GlassRow icon="theme-light-dark" title="Light and dark" detail="Follows your iPhone’s appearance, turn-by-turn too" />
         <GlassRow icon="delete-outline" title="Delete all drives" danger onPress={deleteAll} />
 
         <Text style={[t.caption, { textAlign: 'center', marginTop: 12 }]}>

@@ -172,6 +172,10 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     controller.modalPresentationStyle = .fullScreen
     controller.routeLineTracksTraversal = true
     controller.delegate = self
+    // Light or dark follows the phone's appearance, like the rest of Joyride.
+    controller.automaticallyAdjustsStyleForTimeOfDay = false
+    controller.usesNightStyleInDarkMode = true
+    controller.styleManager.applyStyle(type: presenter.traitCollection.userInterfaceStyle == .light ? .day : .night)
 
     session = replay
     self.onEnded = onEnded
