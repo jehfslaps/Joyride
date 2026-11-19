@@ -117,6 +117,25 @@ jobs:
             screen "$LOOK-6-welcome" "/welcome" 8
           done
           xcrun simctl ui "$DEVICE" appearance dark
+
+          # Motion check: video of the switch being flipped back mid-slide, and of routes arriving.
+          xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" 2>/dev/null || true
+          xcrun simctl spawn "$DEVICE" defaults write "$BUNDLE_ID" demoRoute "/surprise?wiggle=1"
+          xcrun simctl io "$DEVICE" recordVideo --codec h264 --force shots/motion-surprise.mp4 &
+          REC=$!
+          sleep 2
+          SIMCTL_CHILD_TZ=America/Los_Angeles xcrun simctl launch "$DEVICE" "$BUNDLE_ID" || true
+          sleep 12
+          kill -INT $REC; wait $REC || true
+          xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" 2>/dev/null || true
+          xcrun simctl spawn "$DEVICE" defaults write "$BUNDLE_ID" demoRoute "/routes?lng=-117.9462&lat=33.9319&name=La%20Habra"
+          xcrun simctl io "$DEVICE" recordVideo --codec h264 --force shots/motion-routes.mp4 &
+          REC=$!
+          sleep 2
+          SIMCTL_CHILD_TZ=America/Los_Angeles xcrun simctl launch "$DEVICE" "$BUNDLE_ID" || true
+          sleep 30
+          kill -INT $REC; wait $REC || true
+
           screen dark-7-relive-navigation "/drive/1794717720000?go=1" 60
           sleep 30
           xcrun simctl io "$DEVICE" screenshot shots/dark-8-relive-navigation-later.png

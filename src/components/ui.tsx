@@ -6,20 +6,27 @@ import MaskedViewBase from '@react-native-masked-view/masked-view';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import React, { useEffect, useState, type ComponentProps, type ReactNode } from 'react';
 import {
   AccessibilityInfo,
   ActivityIndicator,
-  Animated,
-  Easing,
   Pressable,
   StyleSheet,
   Text,
   View,
   type StyleProp,
   type TextStyle,
+  type PressableProps,
   type ViewStyle,
 } from 'react-native';
+import Animated, {
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSpring,
+} from 'react-native-reanimated';
+import { enterRise, exitRise, springFade, springPress, springUI } from '@/lib/motion';
 import { Marker, Polyline } from 'react-native-maps';
 import type { LngLat } from '@/lib/geo';
 import { radius, typeFor, useTheme } from '@/theme';
@@ -46,6 +53,50 @@ export const useReduceTransparency = () =>
   useAccessibilityFlag(AccessibilityInfo.isReduceTransparencyEnabled, 'reduceTransparencyChanged');
 
 const tap = () => Haptics.selectionAsync().catch(() => {});
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+/**
+ * A pressable that sinks slightly the instant it's touched and springs back
+ * when released. The spring picks up from wherever it is, so quick repeated
+ * taps never jump.
+ */
+export function PressableScale({
+  scaleTo = 0.97,
+  style,
+  onPressIn,
+  onPressOut,
+  children,
+  ...rest
+}: Omit<PressableProps, 'style' | 'children'> & { scaleTo?: number; style?: StyleProp<ViewStyle>; children?: ReactNode }) {
+  const scale = useSharedValue(1);
+  const anim = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  return (
+    <AnimatedPressable
+      {...rest}
+      onPressIn={(e) => {
+        scale.value = withSpring(scaleTo, springPress);
+        onPressIn?.(e);
+      }}
+      onPressOut={(e) => {
+        scale.value = withSpring(1, springUI);
+        onPressOut?.(e);
+      }}
+      style={[style, anim]}
+    >
+      {children}
+    </AnimatedPressable>
+  );
+}
+
+/** A 0→1 spring that follows `on`, for crossfading between two states. */
+function useToggle(on: boolean) {
+  const v = useSharedValue(on ? 1 : 0);
+  useEffect(() => {
+    v.value = withSpring(on ? 1 : 0, springFade);
+  }, [on, v]);
+  return v;
+}
 
 // ---- Glass -------------------------------------------------------------------------
 
@@ -136,12 +187,15 @@ export function HeroNumber({
   caption,
   size = 64,
   style,
+  animate = true,
 }: {
   value: string;
   unit?: string;
   caption?: ReactNode;
   size?: number;
   style?: StyleProp<ViewStyle>;
+  /** Roll to a new value instead of cutting to it (off for ticking clocks). */
+  animate?: boolean;
 }) {
   const p = useTheme();
   const t = typeFor(p);
@@ -149,14 +203,19 @@ export function HeroNumber({
   return (
     <View style={style}>
       {caption ? typeof caption === 'string' ? <Text style={t.caption}>{caption}</Text> : caption : null}
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }}>
+      <Animated.View
+        key={animate ? `${value}${unit ?? ''}` : 'still'}
+        entering={animate ? enterRise : undefined}
+        exiting={animate ? exitRise : undefined}
+        style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }}
+      >
         <MaskedView maskElement={<Text style={numStyle}>{value}</Text>}>
           <LinearGradient colors={[p.heroFrom, p.heroTo]} start={{ x: 0, y: 0.1 }} end={{ x: 0, y: 1.1 }}>
             <Text style={[numStyle, { opacity: 0 }]}>{value}</Text>
           </LinearGradient>
         </MaskedView>
         {unit ? <Text style={[t.title, { color: p.text2, fontWeight: '500', marginBottom: size * 0.14 }]}>{unit}</Text> : null}
-      </View>
+      </Animated.View>
     </View>
   );
 }
@@ -169,7 +228,7 @@ export function Label({ children, style }: { children: ReactNode; style?: StyleP
 
 // ---- Controls ---------------------------------------------------------------------------
 
-/** A glass capsule like "Avoid / **Freeways**". Solid mint when on. */
+/** A glass capsule like "Avoid / **Freeways**". Fades to solid mint when on. */
 export function ContextChip({
   prefix,
   label,
@@ -186,33 +245,84 @@ export function ContextChip({
   accessibilityRole?: 'button' | 'switch';
 }) {
   const p = useTheme();
-  const fg = on ? p.onMint : p.mint;
-  const content = (
-    <View style={styles.chipRow}>
-      {icon && <MaterialCommunityIcons name={icon} size={15} color={on ? p.onMint : p.text2} />}
-      {prefix ? <Text style={[styles.chipText, { color: on ? p.onMint : p.text3, fontWeight: '500' }]}>{prefix} /</Text> : null}
-      <Text style={[styles.chipText, { color: fg }]}>{label}</Text>
-    </View>
-  );
+  const v = useToggle(!!on);
+  const fill = useAnimatedStyle(() => ({ opacity: v.value }));
+  const main = useAnimatedStyle(() => ({ color: interpolateColor(v.value, [0, 1], [p.mint, p.onMint]) }));
+  const dim = useAnimatedStyle(() => ({ color: interpolateColor(v.value, [0, 1], [p.text3, p.onMint]) }));
   return (
-    <Pressable
+    <PressableScale
       onPress={() => {
         tap();
         onPress?.();
       }}
+      disabled={!onPress}
       accessibilityRole={accessibilityRole}
       accessibilityState={accessibilityRole === 'switch' ? { checked: !!on } : { selected: !!on }}
       accessibilityLabel={prefix ? `${prefix} ${label}` : label}
       hitSlop={4}
-      style={({ pressed }) => ({ transform: [{ scale: pressed ? 0.97 : 1 }] })}
     >
-      {on ? (
-        <View style={[styles.chip, { backgroundColor: p.mint }]}>{content}</View>
-      ) : (
-        <GlassCard radiusSize={radius.pill} style={styles.chip}>
-          {content}
-        </GlassCard>
-      )}
+      <GlassCard radiusSize={radius.pill} style={styles.chip}>
+        <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: p.mint, borderRadius: radius.pill }, fill]} pointerEvents="none" />
+        <View style={styles.chipRow}>
+          {icon && <MaterialCommunityIcons name={icon} size={15} color={on ? p.onMint : p.text2} />}
+          {prefix ? <Animated.Text style={[styles.chipText, { fontWeight: '500' }, dim]}>{prefix} /</Animated.Text> : null}
+          <Animated.Text style={[styles.chipText, main]}>{label}</Animated.Text>
+        </View>
+      </GlassCard>
+    </PressableScale>
+  );
+}
+
+/** Two or more options with a mint thumb that slides between them. */
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  const p = useTheme();
+  const [width, setWidth] = useState(0);
+  const index = Math.max(0, options.findIndex((o) => o.value === value));
+  const x = useSharedValue(index);
+  useEffect(() => {
+    x.value = withSpring(index, springUI);
+  }, [index, x]);
+  const seg = width > 0 ? (width - 8) / options.length : 0;
+  const thumb = useAnimatedStyle(() => ({ transform: [{ translateX: x.value * seg }] }));
+  return (
+    <GlassCard radiusSize={18} style={styles.segment}>
+      <View style={{ flexDirection: 'row' }} onLayout={(e) => setWidth(e.nativeEvent.layout.width + 8)}>
+        {seg > 0 && <Animated.View style={[styles.segmentThumb, { width: seg, backgroundColor: p.mint }, thumb]} pointerEvents="none" />}
+        {options.map((o, i) => (
+          <SegmentLabel
+            key={o.value}
+            label={o.label}
+            index={i}
+            pos={x}
+            onPress={() => {
+              tap();
+              onChange(o.value);
+            }}
+            selected={i === index}
+          />
+        ))}
+      </View>
+    </GlassCard>
+  );
+}
+
+function SegmentLabel({ label, index, pos, onPress, selected }: { label: string; index: number; pos: { value: number }; onPress: () => void; selected: boolean }) {
+  const p = useTheme();
+  const color = useAnimatedStyle(() => {
+    const near = Math.max(0, 1 - Math.abs(pos.value - index));
+    return { color: interpolateColor(near, [0, 1], [p.mint, p.onMint]) };
+  });
+  return (
+    <Pressable onPress={onPress} style={styles.segmentBtn} accessibilityRole="button" accessibilityState={{ selected }}>
+      <Animated.Text style={[styles.segmentText, color]}>{label}</Animated.Text>
     </Pressable>
   );
 }
@@ -245,6 +355,8 @@ export function PrimaryPill({
   const p = useTheme();
   const fg = tone === 'mint' ? p.onMint : tone === 'hazard' ? '#fff' : p.mint;
   const height = compact ? 48 : 58;
+  const enabled = useToggle(!disabled);
+  const enabledStyle = useAnimatedStyle(() => ({ opacity: 0.45 + 0.55 * enabled.value }));
   const inner = (
     <View style={styles.pillRow}>
       {busy ? <ActivityIndicator color={fg} /> : icon ? <MaterialCommunityIcons name={icon} size={22} color={fg} /> : null}
@@ -255,7 +367,8 @@ export function PrimaryPill({
     </View>
   );
   return (
-    <Pressable
+    <PressableScale
+      scaleTo={0.98}
       accessibilityRole="button"
       accessibilityState={{ disabled: !!(disabled || busy), busy: !!busy }}
       disabled={disabled || busy}
@@ -263,8 +376,9 @@ export function PrimaryPill({
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
         onPress();
       }}
-      style={({ pressed }) => [{ opacity: disabled ? 0.45 : 1, transform: [{ scale: pressed ? 0.98 : 1 }] }, style]}
+      style={style}
     >
+      <Animated.View style={enabledStyle}>
       {tone === 'glass' ? (
         <GlassCard radiusSize={radius.pill} style={[styles.pill, { height }]}>
           {inner}
@@ -272,7 +386,8 @@ export function PrimaryPill({
       ) : (
         <View style={[styles.pill, { height, backgroundColor: tone === 'mint' ? p.mint : p.hazard }]}>{inner}</View>
       )}
-    </Pressable>
+      </Animated.View>
+    </PressableScale>
   );
 }
 
@@ -295,7 +410,8 @@ export function IconTile({ icon, size = 44, color, glow }: { icon: IconName; siz
 export function RoundButton({ icon, onPress, label, tone }: { icon: IconName; onPress: () => void; label: string; tone?: 'hazard' }) {
   const p = useTheme();
   return (
-    <Pressable
+    <PressableScale
+      scaleTo={0.92}
       onPress={() => {
         tap();
         onPress();
@@ -303,12 +419,11 @@ export function RoundButton({ icon, onPress, label, tone }: { icon: IconName; on
       hitSlop={8}
       accessibilityRole="button"
       accessibilityLabel={label}
-      style={({ pressed }) => ({ transform: [{ scale: pressed ? 0.94 : 1 }] })}
     >
       <GlassCard radiusSize={22} style={styles.round}>
         <MaterialCommunityIcons name={icon} size={icon === 'chevron-left' ? 28 : 20} color={tone === 'hazard' ? p.hazard : p.mint} />
       </GlassCard>
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -358,9 +473,9 @@ export function GlassRow({
   );
   if (!onPress) return body;
   return (
-    <Pressable onPress={onPress} accessibilityRole="button" style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1 })}>
+    <PressableScale onPress={onPress} accessibilityRole="button" scaleTo={0.985}>
       {body}
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -430,30 +545,21 @@ export function GlowRoute({
 export function LivePuck({ at }: { at: LngLat }) {
   const p = useTheme();
   const still = useReduceMotion();
-  const pulse = useRef(new Animated.Value(0)).current;
+  const pulse = useSharedValue(0);
   useEffect(() => {
     if (still) return;
-    const loop = Animated.loop(
-      Animated.timing(pulse, { toValue: 1, duration: 2400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-    );
-    loop.start();
-    return () => loop.stop();
+    // A slow, fully damped spring from 0 to 1, over and over (about 2.4 s each).
+    const r = 2.4;
+    pulse.value = withRepeat(withSpring(1, { mass: 1, stiffness: Math.pow((2 * Math.PI) / r, 2), damping: (4 * Math.PI) / r }), -1, false);
   }, [still, pulse]);
+  const halo = useAnimatedStyle(() => ({
+    opacity: 0.5 * (1 - pulse.value),
+    transform: [{ scale: 1 + 0.6 * pulse.value }],
+  }));
   return (
     <Marker coordinate={toLatLng(at)} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={!still} zIndex={10}>
       <View style={styles.puckBox}>
-        {!still && (
-          <Animated.View
-            style={[
-              styles.puckHalo,
-              {
-                backgroundColor: p.glow,
-                opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] }),
-                transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.6] }) }],
-              },
-            ]}
-          />
-        )}
+        {!still && <Animated.View style={[styles.puckHalo, { backgroundColor: p.glow }, halo]} />}
         <View style={[styles.puckRing, { backgroundColor: p.mint, shadowColor: p.glow }]}>
           <View style={[styles.puckCore, { backgroundColor: p.glow }]} />
         </View>
@@ -488,6 +594,10 @@ const styles = StyleSheet.create({
   chip: { height: 36, paddingHorizontal: 14, borderRadius: radius.pill, justifyContent: 'center' },
   chipRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   chipText: { fontSize: 14, fontWeight: '700' },
+  segment: { padding: 4 },
+  segmentThumb: { position: 'absolute', top: 0, bottom: 0, left: 0, borderRadius: 14 },
+  segmentBtn: { flex: 1, height: 44, alignItems: 'center', justifyContent: 'center' },
+  segmentText: { fontSize: 15, fontWeight: '700' },
   pill: { borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 22 },
   pillRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   pillText: { fontWeight: '700', letterSpacing: -0.2 },

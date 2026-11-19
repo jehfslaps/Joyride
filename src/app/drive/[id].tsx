@@ -3,6 +3,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import MapView from 'react-native-maps';
+import Animated from 'react-native-reanimated';
+import { enterFade, enterRise, exitFade, moveList } from '@/lib/motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ContextChip, GlassRow, GlowRoute, HeroNumber, Label, LivePuck, PinTile, PrimaryPill, RoundButton, TwoTone, useMapLook, Vignette } from '@/components/ui';
 import { useHere } from '@/lib/useHere';
@@ -206,7 +208,7 @@ export default function DriveScreen() {
         </View>
 
         {choice ? (
-          <View style={{ gap: 10 }}>
+          <Animated.View key="choice" entering={enterRise} exiting={exitFade} layout={moveList} style={{ gap: 10 }}>
             <Label>WHERE DO YOU WANT TO PICK IT UP?</Label>
             <GlassRow
               icon="home-outline"
@@ -223,8 +225,9 @@ export default function DriveScreen() {
             <Pressable onPress={() => setChoice(null)} style={{ alignSelf: 'center', padding: 8 }}>
               <Text style={[t.body, { color: p.text2 }]}>Cancel</Text>
             </Pressable>
-          </View>
+          </Animated.View>
         ) : (
+          <Animated.View key="relive" entering={enterFade} exiting={exitFade} layout={moveList}>
           <PrimaryPill
             label={preparing != null ? preparingLabel(preparing) : 'Relive this drive'}
             icon="steering"
@@ -232,6 +235,7 @@ export default function DriveScreen() {
             onPress={onRelive}
             busy={preparing != null}
           />
+          </Animated.View>
         )}
 
         {!hasMapbox() && (

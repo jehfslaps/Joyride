@@ -1,10 +1,13 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
+import { DEMO } from '@/lib/demo';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ContextChip, GlassCard, GlassRow, Label, PrimaryPill, ScreenHeader, TwoTone } from '@/components/ui';
+import { ContextChip, GlassCard, GlassRow, Label, PrimaryPill, ScreenHeader, Segmented, TwoTone } from '@/components/ui';
+import Animated from 'react-native-reanimated';
+import { enterFade, enterRise, exitFade, moveList } from '@/lib/motion';
 import { pickSurprise } from '@/lib/funroutes';
 import type { LngLat } from '@/lib/geo';
 import { searchAreas, type Place } from '@/lib/places';
@@ -26,6 +29,15 @@ export default function SurpriseScreen() {
   const [areas, setAreas] = useState<Place[]>([]);
   const [area, setArea] = useState<Place | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Demo builds only: flip the switch back mid-slide, to check springs redirect without jumping.
+  const { wiggle } = useLocalSearchParams<{ wiggle?: string }>();
+  useEffect(() => {
+    if (!DEMO || wiggle !== '1') return;
+    const steps: [number, 'here' | 'there'][] = [[1500, 'there'], [1640, 'here'], [1760, 'there'], [3200, 'here'], [4400, 'there']];
+    const timers = steps.map(([ms, m]) => setTimeout(() => setMode(m), ms));
+    return () => timers.forEach(clearTimeout);
+  }, [wiggle]);
 
   useEffect(() => {
     (async () => {
@@ -82,22 +94,14 @@ export default function SurpriseScreen() {
         <ScreenHeader title="surprise" onBack={() => router.back()} />
         <TwoTone lead="Joyride picks a spot." value="You just drive." size="title" />
 
-        <GlassCard radiusSize={18} style={s.segment}>
-          {(['here', 'there'] as const).map((m) => (
-            <Pressable
-              key={m}
-              onPress={() => setMode(m)}
-              style={[s.segmentBtn, mode === m && { backgroundColor: p.mint }]}
-              accessibilityRole="button"
-              accessibilityState={{ selected: mode === m }}
-            >
-              <Text style={[s.segmentText, mode === m && { color: p.onMint }]}>{m === 'here' ? 'From here' : 'Over there'}</Text>
-            </Pressable>
-          ))}
-        </GlassCard>
+        <Segmented
+          options={[{ value: 'here', label: 'From here' }, { value: 'there', label: 'Over there' }]}
+          value={mode}
+          onChange={setMode}
+        />
 
         {mode === 'there' && (
-          <View style={{ gap: 8 }}>
+          <Animated.View entering={enterRise} exiting={exitFade} layout={moveList} style={{ gap: 8 }}>
             <Label>END UP SOMEWHERE IN</Label>
             {area ? (
               <GlassRow
@@ -121,32 +125,38 @@ export default function SurpriseScreen() {
                   />
                 </GlassCard>
                 {areas.map((a, i) => (
-                  <GlassRow key={`${a.name}-${i}`} title={a.name} detail={a.detail || undefined} onPress={() => setArea(a)} />
+                  <Animated.View key={`${a.name}-${i}`} entering={enterFade} exiting={exitFade} layout={moveList}>
+                    <GlassRow title={a.name} detail={a.detail || undefined} onPress={() => setArea(a)} />
+                  </Animated.View>
                 ))}
               </>
             )}
-          </View>
+          </Animated.View>
         )}
 
         {(mode === 'here' || (area && !area.bbox)) && (
-          <View style={{ gap: 10 }}>
+          <Animated.View entering={enterRise} exiting={exitFade} layout={moveList} style={{ gap: 10 }}>
             <Label>{mode === 'here' ? 'END SOMEWHERE WITHIN' : 'WITHIN THIS FAR OF IT'}</Label>
             <View style={s.chips}>
               {MILES.map((m) => (
                 <ContextChip key={m} label={`${m} mi`} on={miles === m} onPress={() => setMiles(m)} />
               ))}
             </View>
-          </View>
+          </Animated.View>
         )}
 
+        <Animated.View layout={moveList}>
         <GlassRow
           icon="eye-off-outline"
           title="Keep it a secret"
           detail="Don’t show where we’re going until we get there"
           right={<Switch value={secret} onValueChange={setSecret} trackColor={{ true: p.brand }} accessibilityLabel="Keep it a secret" />}
         />
+        </Animated.View>
 
-        <PrimaryPill label="Find a surprise destination" icon="dice-5-outline" onPress={go} busy={busy} />
+        <Animated.View layout={moveList}>
+          <PrimaryPill label="Find a surprise destination" icon="dice-5-outline" onPress={go} busy={busy} />
+        </Animated.View>
         {!here && (
           <View style={{ flexDirection: 'row', gap: 8, alignSelf: 'center', alignItems: 'center' }}>
             <ActivityIndicator color={p.text2} />

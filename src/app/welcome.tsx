@@ -5,6 +5,8 @@ import type { ComponentProps } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GlassCard, IconTile, PrimaryPill, TwoTone } from '@/components/ui';
+import Animated from 'react-native-reanimated';
+import { riseIn } from '@/lib/motion';
 import { makeStyles, typeFor, useTheme } from '@/theme';
 
 export const WELCOME_KEY = 'joyride:welcomed:v1';
@@ -55,14 +57,14 @@ export default function Welcome() {
           <TwoTone lead="For drives where" value="the drive is the point." size="title" />
         </View>
 
-        {POINTS.map((pt) => (
-          <View key={pt.title} style={s.point}>
+        {POINTS.map((pt, i) => (
+          <Animated.View key={pt.title} entering={riseIn(80 + i * 70)} style={s.point}>
             <IconTile icon={pt.icon} size={44} />
             <View style={{ flex: 1, gap: 3 }}>
               <Text style={t.bodyStrong}>{pt.title}</Text>
               <Text style={[t.caption, { fontSize: 14, lineHeight: 20 }]}>{pt.body}</Text>
             </View>
-          </View>
+          </Animated.View>
         ))}
 
         <GlassCard style={s.note}>

@@ -4,7 +4,9 @@ import * as Linking from 'expo-linking';
 import * as Location from 'expo-location';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, Pressable, Settings, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, Settings, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { enterFade, enterRise, exitFade, moveList, springUI } from '@/lib/motion';
 import MapView from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -17,6 +19,7 @@ import {
   IconTile,
   Label,
   LivePuck,
+  PressableScale,
   PrimaryPill,
   RoundButton,
   TwoTone,
@@ -43,6 +46,7 @@ export default function Home() {
   const s = useStyles();
   const mapLook = useMapLook();
   const here = useHere();
+  const { height: screenH } = useWindowDimensions();
   const map = useRef<MapView>(null);
   const [state, setState] = useState<RecorderState>('idle');
   const [points, setPoints] = useState<TrackPoint[]>([]);
@@ -183,12 +187,18 @@ export default function Home() {
   }
 
   const recording = state === 'recording';
+  // The map grows while recording, on a spring from wherever it is.
+  const mapH = useSharedValue(screenH * 0.4);
+  useEffect(() => {
+    mapH.value = withSpring(screenH * (recording ? 0.58 : 0.4), springUI);
+  }, [recording, screenH, mapH]);
+  const mapHeight = useAnimatedStyle(() => ({ height: mapH.value }));
   const totalM = drives.reduce((a, d) => a + d.distanceM, 0);
   const startedAt = points[0] ? new Date(points[0][2]).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
 
   return (
     <View style={s.screen}>
-      <View style={[s.mapWrap, { height: recording ? '58%' : '40%' }]}>
+      <Animated.View style={[s.mapWrap, mapHeight]}>
         <MapView ref={map} style={StyleSheet.absoluteFill} showsUserLocation={false} {...mapLook}>
           {coords.length > 1 && <GlowRoute coords={points.map((pt) => [pt[0], pt[1]] as LngLat)} />}
           {here && <LivePuck at={here} />}
@@ -208,20 +218,22 @@ export default function Home() {
             <RoundButton icon="cog-outline" onPress={() => router.push('/settings')} label="Settings" />
           )}
         </View>
-      </View>
+      </Animated.View>
 
       {recording ? (
-        <View style={[s.panel, { paddingBottom: insets.bottom + 16 }]}>
-          <HeroNumber value={clock(elapsed)} size={72} caption={<TwoTone lead="This drive ·" value={`started ${startedAt}`} size="body" />} />
+        <Animated.View key="rec" entering={enterRise} exiting={exitFade} style={[s.panel, { paddingBottom: insets.bottom + 16 }]}>
+          <HeroNumber animate={false} value={clock(elapsed)} size={72} caption={<TwoTone lead="This drive ·" value={`started ${startedAt}`} size="body" />} />
           <View style={s.chipsRow}>
             <ContextChip prefix="Distance" label={formatMiles(miles)} />
           </View>
           <Text style={[t.caption, { marginTop: 4 }]}>Lock the phone or switch apps. It keeps recording.</Text>
           <View style={{ flex: 1 }} />
           <PrimaryPill label="Stop and save" icon="stop-circle-outline" tone="hazard" onPress={onStop} busy={busy} />
-        </View>
+        </Animated.View>
       ) : (
-        <FlatList
+        <Animated.View key="list" entering={enterFade} exiting={exitFade} style={{ flex: 1 }}>
+        <Animated.FlatList
+          itemLayoutAnimation={moveList}
           style={s.list}
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 24 }}
           data={drives}
@@ -267,9 +279,9 @@ export default function Home() {
           }
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           renderItem={({ item }) => (
-            <Pressable
+            <PressableScale
+              scaleTo={0.985}
               onPress={() => router.push({ pathname: '/drive/[id]', params: { id: item.id } })}
-              style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1, transform: [{ scale: pressed ? 0.99 : 1 }] })}
               accessibilityRole="button"
             >
               <GlassCard style={s.card}>
@@ -282,9 +294,10 @@ export default function Home() {
                 </View>
                 <MaterialCommunityIcons name="chevron-right" size={22} color={p.text3} />
               </GlassCard>
-            </Pressable>
+            </PressableScale>
           )}
         />
+        </Animated.View>
       )}
     </View>
   );

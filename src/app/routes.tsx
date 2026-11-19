@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Pressable,
   StyleSheet,
   Switch,
@@ -14,12 +13,15 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import MapView from 'react-native-maps';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { enterFade, enterRise, exitFade, moveList, springFade } from '@/lib/motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { JoyrideNav } from '../../modules/joyride-nav';
-import { ContextChip, GlassCard, GlassRow, GlowRoute, HeroNumber, Label, LivePuck, PinTile, PrimaryPill, RoundButton, SpotDot, TwoTone, useMapLook, Vignette } from '@/components/ui';
+import { ContextChip, GlassCard, GlassRow, GlowRoute, HeroNumber, Label, LivePuck, PinTile, PressableScale, PrimaryPill, RoundButton, SpotDot, TwoTone, useMapLook, Vignette } from '@/components/ui';
 import { buildFunRoutes, NO_RULES, VisitedStreets, type RoadRules, type RouteOption } from '@/lib/funroutes';
-import { formatDuration, formatMiles, type LngLat } from '@/lib/geo';
+import { formatMiles, type LngLat } from '@/lib/geo';
 import { searchPlaces, type Place } from '@/lib/places';
 import { getRecorderState, startRecording } from '@/lib/recorder';
 import { getDrivePoints, listDrives } from '@/lib/storage';
@@ -240,8 +242,9 @@ export default function FunRoutesScreen() {
       </View>
 
       {!dest ? (
-        <FlatList
+        <Animated.FlatList
           data={results}
+          itemLayoutAnimation={moveList}
           keyExtractor={(pl, i) => `${pl.name}-${i}`}
           contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: insets.bottom + 24 }}
           keyboardShouldPersistTaps="handled"
@@ -250,13 +253,18 @@ export default function FunRoutesScreen() {
               {query.trim().length < 3 ? 'Type a place, address, or city.' : searching ? '' : 'No matches yet.'}
             </Text>
           }
-          renderItem={({ item }) => <GlassRow icon="map-marker-outline" title={item.name} detail={item.detail || undefined} onPress={() => setDest(item)} />}
+          renderItem={({ item }) => (
+            <Animated.View entering={enterFade} exiting={exitFade}>
+              <GlassRow icon="map-marker-outline" title={item.name} detail={item.detail || undefined} onPress={() => setDest(item)} />
+            </Animated.View>
+          )}
         />
       ) : (
         <View style={{ flex: 1 }}>
-          <FlatList
+          <Animated.FlatList
             data={routes}
             keyExtractor={(r) => r.id}
+            itemLayoutAnimation={moveList}
             contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, gap: 8, paddingBottom: 12 }}
             ListHeaderComponent={
               <View style={{ gap: 12, marginBottom: 4 }}>
@@ -271,13 +279,15 @@ export default function FunRoutesScreen() {
             renderItem={({ item }) => {
               const on = item.id === selected;
               return (
-                <Pressable
+                <Animated.View entering={enterRise} exiting={exitFade}>
+                <PressableScale
+                  scaleTo={0.985}
                   onPress={() => setSelected(item.id)}
                   accessibilityRole="button"
                   accessibilityState={{ selected: on }}
-                  style={({ pressed }) => ({ transform: [{ scale: pressed ? 0.99 : 1 }] })}
                 >
-                  <GlassCard style={[s.routeRow, on && { borderColor: p.brand, borderWidth: 1.5 }]} glow={on}>
+                  <GlassCard style={s.routeRow}>
+                    <SelectedGlow on={on} />
                     <View style={s.timeCol}>
                       <Text style={[s.routeTime, { color: on ? p.mint : item.style === 'fastest' ? p.text2 : p.mint }]}>
                         {Math.round(item.durationS / 60)}
@@ -294,20 +304,21 @@ export default function FunRoutesScreen() {
                       </Text>
                     </View>
                   </GlassCard>
-                </Pressable>
+                </PressableScale>
+                </Animated.View>
               );
             }}
           />
           <GlassCard radiusSize={32} glow style={[s.sheet, { paddingBottom: insets.bottom + 12 }]}>
             {chosen ? (
-              <View style={s.sheetTop}>
+              <Animated.View entering={enterRise} layout={moveList} style={s.sheetTop}>
                 <HeroNumber
                   value={String(Math.round(chosen.durationS / 60))}
                   unit="min"
                   size={52}
                   caption={<TwoTone lead={chosen.style === 'fastest' ? 'Quickest ·' : extraMin > 0 ? `+${extraMin} min of side streets ·` : 'Side streets ·'} value={secret ? 'mystery arrival' : `arrive ${arrive}`} size="body" />}
                 />
-              </View>
+              </Animated.View>
             ) : null}
             <View style={s.recordRow}>
               <Text style={[t.body, { flex: 1 }]}>Record this drive</Text>
@@ -318,6 +329,26 @@ export default function FunRoutesScreen() {
         </View>
       )}
     </View>
+  );
+}
+
+/** The selected route's green edge and glow, fading in and out on a spring. */
+function SelectedGlow({ on }: { on: boolean }) {
+  const p = useTheme();
+  const v = useSharedValue(on ? 1 : 0);
+  useEffect(() => {
+    v.value = withSpring(on ? 1 : 0, springFade);
+  }, [on, v]);
+  const style = useAnimatedStyle(() => ({ opacity: v.value }));
+  return (
+    <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, style]}>
+      <LinearGradient
+        colors={['transparent', p.dark ? 'rgba(30, 107, 69, 0.35)' : 'rgba(30, 138, 87, 0.10)', p.dark ? 'rgba(59, 163, 115, 0.45)' : 'rgba(30, 138, 87, 0.16)']}
+        locations={[0.35, 0.8, 1]}
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={[StyleSheet.absoluteFill, { borderRadius: 22, borderWidth: 1.5, borderColor: p.brand }]} />
+    </Animated.View>
   );
 }
 
