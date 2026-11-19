@@ -310,7 +310,7 @@ export default function FunRoutesScreen() {
                     <Text style={[type.small, { color: colors.faint }]} numberOfLines={1}>
                       {formatMiles(item.distanceM)}
                       {item.newShare != null && item.style !== 'fastest' ? ` · ${Math.round(item.newShare * 100)}% new to you` : ''}
-                      {item.usesHighway ? ' · uses a highway briefly' : ''}
+                      {item.usesHighway ? ` · ${formatMiles(item.highwayM)} on a highway (no way around)` : ''}
                     </Text>
                   </View>
                 </Pressable>
