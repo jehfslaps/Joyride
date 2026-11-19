@@ -20,7 +20,7 @@
     "android": {
       "package": "com.joyridedrives.app7k2",
       "adaptiveIcon": {
-        "backgroundColor": "#0E1116",
+        "backgroundColor": "#050A07",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
