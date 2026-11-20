@@ -124,7 +124,10 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
 
   nonisolated func carPlayManagerDidBeginNavigation(_ carPlayManager: CarPlayManager) {}
 
-  nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, didPresent navigationViewController: CarPlayNavigationViewController) {}
+  nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, didPresent navigationViewController: CarPlayNavigationViewController) {
+    // Same as the phone: the part you've driven turns gray behind you.
+    MainActor.assumeIsolated { navigationViewController.routeLineTracksTraversal = true }
+  }
 
   nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, shouldPresentArrivalUIFor waypoint: Waypoint) -> Bool {
     true

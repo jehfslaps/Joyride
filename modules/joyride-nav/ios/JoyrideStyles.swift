@@ -33,6 +33,9 @@ struct JoyridePalette {
   let hairline: UIColor
   let caution: UIColor
   let hazard: UIColor
+  /// The part of the route you've already driven: plain gray, so it never
+  /// looks like road still ahead.
+  let driven: UIColor
   /// Colors for Mapbox's map, as CSS color strings.
   let map: [String: String]
 
@@ -49,6 +52,7 @@ struct JoyridePalette {
     hairline: UIColor(white: 1, alpha: 0.10),
     caution: UIColor(hex: 0xFFB547),
     hazard: UIColor(hex: 0xFF6B5B),
+    driven: UIColor(hex: 0x5C625F),
     map: [
       "colorLand": "#07110B",
       "colorWater": "#05171A",
@@ -76,6 +80,7 @@ struct JoyridePalette {
     hairline: UIColor(hex: 0x06140C, alpha: 0.10),
     caution: UIColor(hex: 0xC97A00),
     hazard: UIColor(hex: 0xD9432F),
+    driven: UIColor(hex: 0xA9AEAB),
     map: [
       "colorLand": "#EEF6F0",
       "colorWater": "#CFE5E3",
@@ -184,10 +189,10 @@ enum JoyrideTheme {
     EndOfRouteStaticLabel.appearance(for: t).normalTextColor = p.text2
     EndOfRouteButton.appearance(for: t).textColor = p.text
 
-    NavigationMapView.appearance(for: t).routeColor = p.brand
+    NavigationMapView.appearance(for: t).routeColor = ahead(p)
     NavigationMapView.appearance(for: t).routeCasingColor = p.dark ? p.deep : p.emerald
     NavigationMapView.appearance(for: t).routeAlternateColor = p.emerald.withAlphaComponent(0.5)
-    NavigationMapView.appearance(for: t).traversedRouteColor = p.brand.withAlphaComponent(0.3)
+    NavigationMapView.appearance(for: t).traversedRouteColor = p.driven
     NavigationMapView.appearance(for: t).maneuverArrowColor = p.text
     NavigationMapView.appearance(for: t).maneuverArrowStrokeColor = p.deep
     // Mystery drives don't mark where the route ends.
@@ -195,12 +200,18 @@ enum JoyrideTheme {
     NavigationMapView.appearance(for: t).waypointStrokeColor = secret ? .clear : p.deep
   }
 
+  /// The road still ahead: the lime glow at night, the brand green by day.
+  static func ahead(_ p: JoyridePalette) -> UIColor { p.dark ? p.glow : p.brand }
+
   /// The map itself: muted greens, no point-of-interest clutter, a glowing route and position dot.
   @MainActor
   static func styleMap(_ view: NavigationMapView, _ p: JoyridePalette) {
-    view.routeColor = p.brand
+    view.routeColor = ahead(p)
     view.routeCasingColor = p.dark ? p.deep : p.emerald
-    view.traversedRouteColor = p.brand.withAlphaComponent(0.3)
+    // Driven = gray, ahead = bright green. Mapbox draws the road ahead on top,
+    // so where a drive loops back over itself the next pass stays visible.
+    view.routeLineTracksTraversal = true
+    view.traversedRouteColor = p.driven
     view.maneuverArrowColor = p.text
     view.maneuverArrowStrokeColor = p.deep
     var congestion = view.congestionConfiguration

@@ -522,7 +522,7 @@ export function GlowRoute({
     return (
       <Polyline
         coordinates={pts}
-        strokeColor={travelled ? (p.dark ? 'rgba(59, 163, 115, 0.3)' : 'rgba(30, 138, 87, 0.3)') : p.dark ? 'rgba(230, 247, 236, 0.28)' : 'rgba(6, 20, 12, 0.25)'}
+        strokeColor={travelled ? (p.dark ? '#5C625F' : '#A9AEAB') : p.dark ? 'rgba(230, 247, 236, 0.28)' : 'rgba(6, 20, 12, 0.25)'}
         strokeWidth={travelled ? 6 : 4}
         lineCap="round"
         lineJoin="round"
