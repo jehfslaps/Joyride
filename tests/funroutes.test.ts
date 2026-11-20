@@ -13,6 +13,7 @@ import {
   isQuietStreet,
   LEVELS,
   pickSpots,
+  pickWithinTime,
   placeAlong,
   straightStretches,
   stubSpots,
@@ -155,5 +156,15 @@ const r = (id: string, style: RouteOption['style'], min: number, km: number): Ro
 });
 const out = dedupe([r('s', 'weave', 52, 40), r('f', 'fastest', 38, 29), r('n', 'weave', 38.5, 30), r('s2', 'weave', 53, 40.5), r('l', 'weave', 102, 70)]);
 assert.deepEqual(out.map((x) => x.id), ['f', 's', 'l']);
+
+// pickWithinTime: only spots under the limit, else the quickest flagged as too far
+const spotsT: LngLat[] = [[0, 0], [1, 1], [2, 2], [3, 3]];
+const timesT = [90 * 60, 40 * 60, null, 25 * 60];
+for (let i = 0; i < 20; i++) {
+  const got = pickWithinTime(spotsT, timesT, 45 * 60, rand)!;
+  assert.ok(got.fits && got.durationS <= 45 * 60);
+}
+assert.deepEqual(pickWithinTime(spotsT, timesT, 20 * 60), { spot: [3, 3], durationS: 25 * 60, fits: false });
+assert.equal(pickWithinTime(spotsT, [null, null, null, null], 60), null);
 
 console.log('funroutes: all checks passed');

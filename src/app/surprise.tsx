@@ -8,13 +8,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ContextChip, GlassCard, GlassRow, Label, PrimaryPill, ScreenHeader, Segmented, TwoTone } from '@/components/ui';
 import Animated from 'react-native-reanimated';
 import { enterFade, enterRise, exitFade, moveList } from '@/lib/motion';
-import { pickSurprise } from '@/lib/funroutes';
+import { pickSurprise, TooFarError } from '@/lib/funroutes';
 import type { LngLat } from '@/lib/geo';
 import { searchAreas, type Place } from '@/lib/places';
 import { makeStyles, typeFor, useTheme } from '@/theme';
 
 const MILES = [5, 10, 20, 30, 50];
 const METERS_PER_MILE = 1609.344;
+/** Over there: longest drive to get there, in minutes (0 = any). */
+const DRIVE_MINUTES = [0, 30, 45, 60, 90];
+const minutesLabel = (m: number) => (m === 0 ? 'Any' : m < 60 ? `${m} min` : m % 60 ? `${Math.floor(m / 60)}½ hr` : `${m / 60} hr`);
 
 export default function SurpriseScreen() {
   const insets = useSafeAreaInsets();
@@ -23,6 +26,7 @@ export default function SurpriseScreen() {
   const s = useStyles();
   const [mode, setMode] = useState<'here' | 'there'>('here');
   const [miles, setMiles] = useState(20);
+  const [maxMinutes, setMaxMinutes] = useState(0);
   const [secret, setSecret] = useState(true);
   const [here, setHere] = useState<LngLat | null>(null);
   const [areaQuery, setAreaQuery] = useState('');
@@ -68,6 +72,11 @@ export default function SurpriseScreen() {
       Alert.alert('Pick an area', 'Type where you want to end up, like “Orange County”, and pick it from the list.');
       return;
     }
+    await pick(false);
+  }
+
+  async function pick(allowTooFar: boolean) {
+    if (!here) return;
     setBusy(true);
     try {
       const dest = await pickSurprise({
@@ -76,13 +85,27 @@ export default function SurpriseScreen() {
         fromHere: mode === 'here',
         // A city or county's own outline beats a circle when we have it.
         area: mode === 'there' && area?.bbox ? area : undefined,
+        origin: here,
+        maxDriveS: mode === 'there' && maxMinutes ? maxMinutes * 60 : undefined,
+        allowTooFar,
       });
       router.push({
         pathname: '/routes',
         params: { lng: String(dest.coord[0]), lat: String(dest.coord[1]), name: dest.name, secret: secret ? '1' : '0' },
       });
     } catch (e: any) {
-      Alert.alert('Couldn’t pick a spot', e?.message ?? 'Check your connection and try again.');
+      if (e instanceof TooFarError) {
+        Alert.alert(
+          `Nothing that close in ${area?.name ?? 'that area'}`,
+          `The closest part of it is about ${Math.round(e.quickestS / 60)} min away. Go to somewhere near there instead?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Go to the closest part', onPress: () => pick(true) },
+          ],
+        );
+      } else {
+        Alert.alert('Couldn’t pick a spot', e?.message ?? 'Check your connection and try again.');
+      }
     } finally {
       setBusy(false);
     }
@@ -140,6 +163,17 @@ export default function SurpriseScreen() {
             <View style={s.chips}>
               {MILES.map((m) => (
                 <ContextChip key={m} label={`${m} mi`} on={miles === m} onPress={() => setMiles(m)} />
+              ))}
+            </View>
+          </Animated.View>
+        )}
+
+        {mode === 'there' && area && (
+          <Animated.View entering={enterRise} exiting={exitFade} layout={moveList} style={{ gap: 10 }}>
+            <Label>DRIVE THERE IN UNDER</Label>
+            <View style={s.chips}>
+              {DRIVE_MINUTES.map((m) => (
+                <ContextChip key={m} label={minutesLabel(m)} on={maxMinutes === m} onPress={() => setMaxMinutes(m)} />
               ))}
             </View>
           </Animated.View>

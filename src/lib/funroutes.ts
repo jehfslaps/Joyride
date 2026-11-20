@@ -984,22 +984,88 @@ const LANDMARK_MAKI = new Set([
 const STREET_CLASSES = new Set(['street', 'street_limited', 'tertiary', 'secondary']);
 const SURPRISE_MAKI = new Set([...SCENIC_MAKI, ...LANDMARK_MAKI, 'cafe', 'ice-cream', 'bakery', 'restaurant', 'fast-food', 'bar', 'shop']);
 
+/** How many spots to try when a surprise has to be within a drive time. One Matrix call takes up to 25 points. */
+const TIME_SAMPLES = 16;
+
+/**
+ * Drive times in seconds from `origin` to each of `spots`, in one Mapbox
+ * Matrix call (null for a spot Mapbox can't reach). Null if the call fails.
+ */
+export async function driveTimesFrom(origin: LngLat, spots: LngLat[]): Promise<(number | null)[] | null> {
+  if (!spots.length) return [];
+  const pts = [origin, ...spots.slice(0, 24)];
+  const params = new URLSearchParams({ access_token: MAPBOX_TOKEN, sources: '0', annotations: 'duration' });
+  const path = pts.map((p) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`).join(';');
+  try {
+    const res = await fetchWithRetry(`https://api.mapbox.com/directions-matrix/v1/mapbox/driving/${path}?${params}`);
+    if (!res.ok) return null;
+    const body = await res.json();
+    const row: (number | null)[] | undefined = body?.durations?.[0];
+    if (body?.code !== 'Ok' || !row) return null;
+    return spots.slice(0, 24).map((_, i) => (typeof row[i + 1] === 'number' ? row[i + 1] : null));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Of the spots with known drive times, picks a random one that's at most
+ * `maxS` away. If none is, returns the quickest one with `fits: false`.
+ * Null when no spot has a drive time at all.
+ */
+export function pickWithinTime(
+  spots: LngLat[],
+  times: (number | null)[],
+  maxS: number,
+  rand: () => number = Math.random,
+): { spot: LngLat; durationS: number; fits: boolean } | null {
+  const known = spots.map((spot, i) => ({ spot, durationS: times[i] })).filter((s): s is { spot: LngLat; durationS: number } => s.durationS != null);
+  if (!known.length) return null;
+  const fit = known.filter((s) => s.durationS <= maxS);
+  if (fit.length) return { ...fit[Math.floor(rand() * fit.length)], fits: true };
+  const quickest = known.reduce((a, b) => (b.durationS < a.durationS ? b : a));
+  return { ...quickest, fits: false };
+}
+
+/** Thrown by pickSurprise when nothing in the area is within the drive time asked for. */
+export class TooFarError extends Error {
+  constructor(readonly quickestS: number, readonly nearest: LngLat) {
+    super(`The closest part is about ${Math.round(quickestS / 60)} min away.`);
+  }
+}
+
 /**
  * Picks a random destination: somewhere between 40% and 100% of `radiusM`
  * from `center` (so it's a real drive), or anywhere inside `area` when given.
+ * With `maxDriveS` and `origin`, it only picks from spots that are at most that
+ * long a drive from `origin` (throwing TooFarError if none are, unless
+ * `allowTooFar`, which takes the closest spot instead).
  * It prefers a named, fun place near the random spot over a bare street corner.
  */
 export async function pickSurprise(
-  opts: { center: LngLat; radiusM: number; fromHere: boolean; area?: Place },
+  opts: { center: LngLat; radiusM: number; fromHere: boolean; area?: Place; origin?: LngLat; maxDriveS?: number; allowTooFar?: boolean },
   rand: () => number = Math.random,
 ): Promise<Place> {
-  const spot: LngLat = opts.area?.bbox
-    ? randomPointInBox(opts.area.bbox, rand)
-    : opts.fromHere
-      ? randomPointInRing(opts.center, opts.radiusM * 0.4, opts.radiusM, rand)
-      : randomPointInRing(opts.center, 0, opts.radiusM, rand);
+  const randomSpot = (): LngLat =>
+    opts.area?.bbox
+      ? randomPointInBox(opts.area.bbox, rand)
+      : opts.fromHere
+        ? randomPointInRing(opts.center, opts.radiusM * 0.4, opts.radiusM, rand)
+        : randomPointInRing(opts.center, 0, opts.radiusM, rand);
+  let spot = randomSpot();
+  if (opts.maxDriveS && opts.origin) {
+    const spots = Array.from({ length: TIME_SAMPLES }, randomSpot);
+    const times = await driveTimesFrom(opts.origin, spots);
+    const pick = times ? pickWithinTime(spots, times, opts.maxDriveS, rand) : null;
+    if (pick) {
+      if (!pick.fits && !opts.allowTooFar) throw new TooFarError(pick.durationS, pick.spot);
+      spot = pick.spot;
+    }
+  }
+  // Within a time limit, stay close to the spot that fit so the place found doesn't push it over.
+  const searchM = opts.maxDriveS ? 1200 : 2500;
   try {
-    const found = await nearby(spot, 2500, ['poi_label']);
+    const found = await nearby(spot, searchM, ['poi_label']);
     const fun = found.filter((f) => f.name && SURPRISE_MAKI.has(f.maki));
     const pool = fun.length ? fun : found.filter((f) => f.name);
     if (pool.length) {
