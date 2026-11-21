@@ -113,6 +113,7 @@ jobs:
             screen "$LOOK-2-saved-drive" "/drive/1794114300000" 12
             screen "$LOOK-3-fun-routes" "/routes?lng=-117.9243&lat=33.8704&name=Downtown%20Fullerton&pick=weave" 50
             screen "$LOOK-4-surprise-me" "/surprise" 10
+            screen "$LOOK-4b-surprise-over-there" "/surprise?mode=there" 14
             screen "$LOOK-5-settings" "/settings" 8
             screen "$LOOK-6-welcome" "/welcome" 8
           done
@@ -137,6 +138,7 @@ jobs:
           kill -INT $REC; wait $REC || true
 
           screen dark-9-mystery-routes "/routes?lng=-117.8653&lat=34.0203&name=Walnut&secret=1&pick=weave" 50
+          screen dark-10-mystery-just-go "/routes?lng=-117.8653&lat=34.0203&name=Walnut&secret=1&auto=1" 8
           screen dark-7-relive-navigation "/drive/1794717720000?go=1" 60
           sleep 30
           xcrun simctl io "$DEVICE" screenshot shots/dark-8-relive-navigation-later.png

@@ -41,7 +41,7 @@ async function loadVisited(): Promise<VisitedStreets> {
 }
 
 export default function FunRoutesScreen() {
-  const params = useLocalSearchParams<{ lng?: string; lat?: string; name?: string; secret?: string; pick?: string }>();
+  const params = useLocalSearchParams<{ lng?: string; lat?: string; name?: string; secret?: string; pick?: string; auto?: string }>();
   const insets = useSafeAreaInsets();
   const p = useTheme();
   const t = typeFor(p);
@@ -49,6 +49,9 @@ export default function FunRoutesScreen() {
   const mapLook = useMapLook();
   const map = useRef<MapView>(null);
   const secret = params.secret === '1';
+  // Full mystery (Surprise → Over there → Keep it a secret): pick a fun route
+  // for you and start straight away, so nothing about the trip is shown.
+  const [auto, setAuto] = useState(secret && params.auto === '1');
 
   const [here, setHere] = useState<LngLat | null>(null);
   const [query, setQuery] = useState('');
@@ -189,8 +192,24 @@ export default function FunRoutesScreen() {
     return () => sub?.remove();
   }, []);
 
+  // Full mystery: once the routes are in, pick one of the fun ones at random and go.
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!auto || building || autoStarted.current || !routes.length || !here) return;
+    autoStarted.current = true;
+    const fun = routes.filter((r) => r.style !== 'fastest');
+    const pickFrom = fun.length ? fun : routes;
+    const route = pickFrom[Math.floor(Math.random() * pickFrom.length)];
+    setSelected(route.id);
+    goWith(route).finally(() => setAuto(false));
+  }, [auto, building, routes, here]);
+
   async function go() {
-    if (!chosen || !here) return;
+    if (chosen) await goWith(chosen);
+  }
+
+  async function goWith(chosen: RouteOption) {
+    if (!here) return;
     if (!JoyrideNav) {
       Alert.alert('Not available in this build', 'Fun routes need the new navigation engine, which comes with the next app build.');
       return;
@@ -349,6 +368,21 @@ export default function FunRoutesScreen() {
               );
             }}
           />
+          {auto && (
+            <Animated.View entering={enterFade} exiting={exitFade} style={[StyleSheet.absoluteFill, s.autoCover, { paddingBottom: insets.bottom + 24 }]}>
+              <MaterialCommunityIcons name="help-circle-outline" size={44} color={p.brand} />
+              <TwoTone lead="Mystery drive." value="Just follow the turns." size="title" />
+              <Text style={[t.caption, { textAlign: 'center' }]}>
+                {starting ? 'Starting turn-by-turn…' : 'Joyride is picking the streets. You’ll find out where you are when you get there.'}
+              </Text>
+              <ActivityIndicator color={p.brand} />
+              <View style={[s.recordRow, { alignSelf: 'stretch' }]}>
+                <Text style={[t.body, { flex: 1 }]}>Record this drive</Text>
+                <Switch value={record} onValueChange={setRecord} trackColor={{ true: p.brand }} accessibilityLabel="Record this drive" />
+              </View>
+              {!starting && <PrimaryPill tone="glass" label="Let me pick the route" onPress={() => setAuto(false)} />}
+            </Animated.View>
+          )}
           <GlassCard radiusSize={32} glow style={[s.sheet, { paddingBottom: insets.bottom + 12 }]}>
             {chosen ? (
               <Animated.View entering={enterRise} layout={moveList} style={s.sheetTop}>
@@ -408,4 +442,5 @@ const useStyles = makeStyles((p, t) => ({
   sheet: { marginHorizontal: 0, paddingHorizontal: 16, paddingTop: 16, gap: 12, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
   sheetTop: { gap: 4 },
   recordRow: { flexDirection: 'row', alignItems: 'center' },
+  autoCover: { backgroundColor: p.canvas, alignItems: 'center', justifyContent: 'center', gap: 16, paddingHorizontal: 28, zIndex: 10 },
 }));

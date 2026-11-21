@@ -157,3 +157,26 @@ export async function areaName(at: LngLat): Promise<string | null> {
   areaCache.set(key, name);
   return name;
 }
+
+/** The street address at a spot ("12345 Janine Dr, Whittier, CA 90605"), or the nearest street/place name. */
+export async function addressAt(at: LngLat): Promise<string | null> {
+  for (const types of ['address', 'street', 'neighborhood,locality,place']) {
+    const params = new URLSearchParams({
+      longitude: at[0].toFixed(6),
+      latitude: at[1].toFixed(6),
+      types,
+      limit: '1',
+      language: 'en',
+      access_token: MAPBOX_TOKEN,
+    });
+    try {
+      const body = await getJson(`${API}/search/geocode/v6/reverse?${params}`);
+      const p = body?.features?.[0]?.properties;
+      const text = p?.full_address || [p?.name, p?.place_formatted].filter(Boolean).join(', ');
+      if (text) return text;
+    } catch {
+      // try the next, broader kind
+    }
+  }
+  return null;
+}

@@ -8,10 +8,12 @@ import { enterFade, enterRise, exitFade, moveList } from '@/lib/motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ContextChip, GlassRow, GlowRoute, HeroNumber, Label, LivePuck, PinTile, PrimaryPill, RoundButton, TwoTone, useMapLook, Vignette } from '@/components/ui';
 import { useHere } from '@/lib/useHere';
+import * as Haptics from 'expo-haptics';
+import { SpotCard } from '@/components/SpotCard';
 import { JoyrideNav } from '../../../modules/joyride-nav';
 import { DEMO } from '@/lib/demo';
 import { getRecorderState, startRecording } from '@/lib/recorder';
-import { distance, formatMiles, heroDuration, type LngLat } from '@/lib/geo';
+import { distance, formatMiles, heroDuration, project, type LngLat } from '@/lib/geo';
 import { Guidance } from '@/lib/guidance';
 import { buildRouteFromDrive, hasMapbox, MapboxError } from '@/lib/mapbox';
 import type { NavRoute } from '@/lib/route';
@@ -45,6 +47,8 @@ export default function DriveScreen() {
   const [preparing, setPreparing] = useState<number | null>(null);
   const [choice, setChoice] = useState<Choice | null>(null);
   const [recordBack, setRecordBack] = useState(true);
+  // Tap and hold the map: a pin, with its address and GPS coordinates to copy.
+  const [spot, setSpot] = useState<LngLat | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -186,7 +190,22 @@ export default function DriveScreen() {
   return (
     <View style={s.screen}>
       <View style={s.mapWrap}>
-        <MapView ref={map} style={StyleSheet.absoluteFill} showsUserLocation={false} onMapReady={fit} {...mapLook}>
+        <MapView
+          ref={map}
+          style={StyleSheet.absoluteFill}
+          showsUserLocation={false}
+          onMapReady={fit}
+          onLongPress={(e) => {
+            const c: LngLat = [e.nativeEvent.coordinate.longitude, e.nativeEvent.coordinate.latitude];
+            // Close to the drive's line: snap onto it, so it's exactly where you drove.
+            const line = points.map((pt) => [pt[0], pt[1]] as LngLat);
+            const on = project(c, line);
+            setSpot(on && on.offset < 25 ? on.point : c);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+          }}
+          onPress={() => setSpot(null)}
+          {...mapLook}
+        >
           {coords.length > 1 && (
             <>
               <GlowRoute coords={points.map((pt) => [pt[0], pt[1]] as LngLat)} />
@@ -195,6 +214,7 @@ export default function DriveScreen() {
             </>
           )}
           {here && <LivePuck at={here} />}
+          {spot && <PinTile key={`spot-${spot[0]}-${spot[1]}`} at={spot} icon="map-marker" />}
         </MapView>
         <Vignette edge="top" height={insets.top + 90} />
         <Vignette edge="bottom" height={70} />
@@ -204,6 +224,13 @@ export default function DriveScreen() {
           <RoundButton icon="pencil-outline" onPress={onRename} label="Rename" />
           <RoundButton icon="delete-outline" onPress={onDelete} label="Delete" tone="hazard" />
         </View>
+        {spot ? (
+          <SpotCard at={spot} bottom={12} onClose={() => setSpot(null)} />
+        ) : (
+          <Text style={[s.holdHint, { color: p.text2 }]} pointerEvents="none">
+            Tap and hold the map to copy a spot
+          </Text>
+        )}
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: insets.bottom + 24 }}>
@@ -277,5 +304,6 @@ function preparingLabel(f: number) {
 const useStyles = makeStyles((p) => ({
   screen: { flex: 1, backgroundColor: p.canvas },
   mapWrap: { height: '48%', overflow: 'hidden' },
+  holdHint: { position: 'absolute', bottom: 10, alignSelf: 'center', fontSize: 12, fontWeight: '600' },
   topBar: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', gap: 10 },
 }));

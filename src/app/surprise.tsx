@@ -9,11 +9,14 @@ import { ContextChip, GlassCard, GlassRow, Label, PrimaryPill, ScreenHeader, Seg
 import Animated from 'react-native-reanimated';
 import { enterFade, enterRise, exitFade, moveList } from '@/lib/motion';
 import { pickSurprise } from '@/lib/funroutes';
+import { AreaCircle } from '@/components/AreaCircle';
 import type { LngLat } from '@/lib/geo';
 import { searchAreas, type Place } from '@/lib/places';
 import { makeStyles, typeFor, useTheme } from '@/theme';
 
 const MILES = [5, 10, 20, 30, 50];
+/** Over there: the circle's sizes. */
+const AREA_MILES = [5, 10, 15, 20, 30];
 const METERS_PER_MILE = 1609.344;
 
 export default function SurpriseScreen() {
@@ -29,9 +32,16 @@ export default function SurpriseScreen() {
   const [areas, setAreas] = useState<Place[]>([]);
   const [area, setArea] = useState<Place | null>(null);
   const [busy, setBusy] = useState(false);
+  // Over there: the circle on the map.
+  const [thereMiles, setThereMiles] = useState(10);
+  const [thereCenter, setThereCenter] = useState<LngLat | null>(null);
+  const [mapTouched, setMapTouched] = useState(false);
 
   // Demo builds only: flip the switch back mid-slide, to check springs redirect without jumping.
-  const { wiggle } = useLocalSearchParams<{ wiggle?: string }>();
+  const { wiggle, mode: startMode } = useLocalSearchParams<{ wiggle?: string; mode?: string }>();
+  useEffect(() => {
+    if (startMode === 'there') setMode('there');
+  }, [startMode]);
   useEffect(() => {
     if (!DEMO || wiggle !== '1') return;
     const steps: [number, 'here' | 'there'][] = [[1500, 'there'], [1640, 'here'], [1760, 'there'], [3200, 'here'], [4400, 'there']];
@@ -64,22 +74,26 @@ export default function SurpriseScreen() {
       Alert.alert('Finding you…', 'Joyride needs your location first. Make sure Location is allowed.');
       return;
     }
-    if (mode === 'there' && !area) {
-      Alert.alert('Pick an area', 'Type where you want to end up, like “Orange County”, and pick it from the list.');
-      return;
-    }
     setBusy(true);
     try {
+      const there = mode === 'there';
       const dest = await pickSurprise({
-        center: mode === 'there' && area ? area.coord : here,
-        radiusM: miles * METERS_PER_MILE,
-        fromHere: mode === 'here',
+        center: there ? (thereCenter ?? here) : here,
+        radiusM: (there ? thereMiles : miles) * METERS_PER_MILE,
+        fromHere: !there,
         // A city or county's own outline beats a circle when we have it.
-        area: mode === 'there' && area?.bbox ? area : undefined,
+        area: there && area?.bbox ? area : undefined,
       });
       router.push({
         pathname: '/routes',
-        params: { lng: String(dest.coord[0]), lat: String(dest.coord[1]), name: dest.name, secret: secret ? '1' : '0' },
+        params: {
+          lng: String(dest.coord[0]),
+          lat: String(dest.coord[1]),
+          name: dest.name,
+          secret: secret ? '1' : '0',
+          // Over there + secret: no menu, no map, Joyride picks the route and just goes.
+          auto: there && secret ? '1' : '0',
+        },
       });
     } catch (e: any) {
       Alert.alert('Couldn’t pick a spot', e?.message ?? 'Check your connection and try again.');
@@ -90,7 +104,7 @@ export default function SurpriseScreen() {
 
   return (
     <View style={s.screen}>
-      <ScrollView contentContainerStyle={{ padding: 16, paddingTop: insets.top + 8, gap: 18, paddingBottom: insets.bottom + 24 }} keyboardShouldPersistTaps="handled">
+      <ScrollView scrollEnabled={!mapTouched} contentContainerStyle={{ padding: 16, paddingTop: insets.top + 8, gap: 18, paddingBottom: insets.bottom + 24 }} keyboardShouldPersistTaps="handled">
         <ScreenHeader title="surprise" onBack={() => router.back()} />
         <TwoTone lead="Joyride picks a spot." value="You just drive." size="title" />
 
@@ -101,8 +115,23 @@ export default function SurpriseScreen() {
         />
 
         {mode === 'there' && (
-          <Animated.View entering={enterRise} exiting={exitFade} layout={moveList} style={{ gap: 8 }}>
-            <Label>END UP SOMEWHERE IN</Label>
+          <Animated.View entering={enterRise} exiting={exitFade} layout={moveList} style={{ gap: 10 }}>
+            <Label>END UP ANYWHERE IN THE CIRCLE</Label>
+            {here ? (
+              <AreaCircle here={here} miles={thereMiles} area={area} onCenter={setThereCenter} onTouch={setMapTouched} />
+            ) : (
+              <GlassCard radiusSize={24} style={s.mapWait}>
+                <ActivityIndicator color={p.text2} />
+              </GlassCard>
+            )}
+            {!area?.bbox && (
+              <View style={s.chips}>
+                {AREA_MILES.map((m) => (
+                  <ContextChip key={m} label={`${m} mi`} on={thereMiles === m} onPress={() => setThereMiles(m)} />
+                ))}
+              </View>
+            )}
+            <Label>OR PICK A CITY OR COUNTY</Label>
             {area ? (
               <GlassRow
                 icon="map-marker-radius-outline"
@@ -134,9 +163,9 @@ export default function SurpriseScreen() {
           </Animated.View>
         )}
 
-        {(mode === 'here' || (area && !area.bbox)) && (
+        {mode === 'here' && (
           <Animated.View entering={enterRise} exiting={exitFade} layout={moveList} style={{ gap: 10 }}>
-            <Label>{mode === 'here' ? 'END SOMEWHERE WITHIN' : 'WITHIN THIS FAR OF IT'}</Label>
+            <Label>END SOMEWHERE WITHIN</Label>
             <View style={s.chips}>
               {MILES.map((m) => (
                 <ContextChip key={m} label={`${m} mi`} on={miles === m} onPress={() => setMiles(m)} />
@@ -149,7 +178,7 @@ export default function SurpriseScreen() {
         <GlassRow
           icon="eye-off-outline"
           title="Keep it a secret"
-          detail="Don’t show where we’re going until we get there"
+          detail={mode === 'there' ? 'Joyride picks the spot and the route and just goes. You find out when you get there.' : 'Don’t show where we’re going until we get there'}
           right={<Switch value={secret} onValueChange={setSecret} trackColor={{ true: p.brand }} accessibilityLabel="Keep it a secret" />}
         />
         </Animated.View>
@@ -176,4 +205,5 @@ const useStyles = makeStyles((p) => ({
   input: { height: 48, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14 },
   inputText: { flex: 1, color: p.mint, fontSize: 16, fontWeight: '600' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  mapWait: { height: 340, alignItems: 'center', justifyContent: 'center' },
 }));
