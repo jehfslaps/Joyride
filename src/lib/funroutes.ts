@@ -733,7 +733,7 @@ const FEEL: Record<string, string> = {
 
 /** A short description for a mystery route: what it's like, never where it goes. */
 export function mysteryBlurb(r: RouteOption): string {
-  if (r.style === 'fastest') return 'Straight there, no detours';
+  if (r.style === 'fastest') return 'The quickest way, no detours';
   const parts = [FEEL[r.title] ?? 'Winds through side streets'];
   if (r.littleStreets) parts.push(`${r.littleStreets} little street${r.littleStreets === 1 ? '' : 's'}`);
   if (r.culDeSacs) parts.push(`${r.culDeSacs} cul-de-sac${r.culDeSacs === 1 ? '' : 's'}`);
