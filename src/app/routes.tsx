@@ -20,7 +20,7 @@ import { enterFade, enterRise, exitFade, moveList, springFade } from '@/lib/moti
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { JoyrideNav } from '../../modules/joyride-nav';
 import { ContextChip, GlassCard, GlassRow, GlowRoute, HeroNumber, Label, LivePuck, PinTile, PressableScale, PrimaryPill, RoundButton, SpotDot, TwoTone, useMapLook, Vignette } from '@/components/ui';
-import { buildFunRoutes, describe, NO_RULES, VisitedStreets, type RoadRules, type RouteOption } from '@/lib/funroutes';
+import { buildFunRoutes, mysteryBlurb, NO_RULES, VisitedStreets, type RoadRules, type RouteOption } from '@/lib/funroutes';
 import { formatMiles, type LngLat } from '@/lib/geo';
 import { searchPlaces, type Place } from '@/lib/places';
 import { getRecorderState, startRecording } from '@/lib/recorder';
@@ -28,6 +28,9 @@ import { getDrivePoints, listDrives } from '@/lib/storage';
 import { makeStyles, typeFor, useTheme } from '@/theme';
 
 const toLatLng = (c: LngLat) => ({ latitude: c[1], longitude: c[0] });
+/** A route, and which of the surprise spots it goes to (0 = the main one). */
+type Option = RouteOption & { destIdx: number };
+const TRIP = ['Short trip', 'Medium trip', 'Long trip', 'Longer trip'];
 const RULES_KEY = 'joyride:roadRules';
 
 /** Every street from your recorded drives, so routes can favor new ones. */
@@ -41,7 +44,7 @@ async function loadVisited(): Promise<VisitedStreets> {
 }
 
 export default function FunRoutesScreen() {
-  const params = useLocalSearchParams<{ lng?: string; lat?: string; name?: string; secret?: string; pick?: string; auto?: string }>();
+  const params = useLocalSearchParams<{ lng?: string; lat?: string; name?: string; secret?: string; pick?: string; more?: string }>();
   const insets = useSafeAreaInsets();
   const p = useTheme();
   const t = typeFor(p);
@@ -49,9 +52,15 @@ export default function FunRoutesScreen() {
   const mapLook = useMapLook();
   const map = useRef<MapView>(null);
   const secret = params.secret === '1';
-  // Full mystery (Surprise → Over there → Keep it a secret): pick a fun route
-  // for you and start straight away, so nothing about the trip is shown.
-  const [auto, setAuto] = useState(secret && params.auto === '1');
+  // Surprise also sends closer spots, so the list has short trips as well as long ones.
+  const extras = useMemo<Place[]>(() => {
+    try {
+      const list: { lng: number; lat: number; name: string }[] = params.more ? JSON.parse(params.more) : [];
+      return list.map((m) => ({ name: m.name, detail: '', coord: [m.lng, m.lat] as LngLat, kind: 'surprise' }));
+    } catch {
+      return [];
+    }
+  }, [params.more]);
 
   const [here, setHere] = useState<LngLat | null>(null);
   const [query, setQuery] = useState('');
@@ -62,7 +71,7 @@ export default function FunRoutesScreen() {
       ? { name: params.name ?? 'Surprise destination', detail: '', coord: [Number(params.lng), Number(params.lat)], kind: 'surprise' }
       : null,
   );
-  const [routes, setRoutes] = useState<RouteOption[]>([]);
+  const [routes, setRoutes] = useState<Option[]>([]);
   const [building, setBuilding] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [record, setRecord] = useState(true);
@@ -123,25 +132,37 @@ export default function FunRoutesScreen() {
     setRoutes([]);
     setSelected(null);
     setBuilding(true);
-    buildFunRoutes(here, dest.coord, {
-      rules,
-      visited,
-      onRoute: (all) => {
-        if (id === buildId.current) setRoutes(all);
-      },
-    })
-      .then((all) => {
-        if (id !== buildId.current) return;
-        setRoutes(all);
-        if (!all.length) Alert.alert('No routes found', 'Mapbox couldn’t find a driving route there. Try another destination.');
-      })
-      .catch((e) => {
-        if (id === buildId.current) Alert.alert('Couldn’t find routes', e?.message ?? 'Check your connection and try again.');
-      })
-      .finally(() => {
-        if (id === buildId.current) setBuilding(false);
+    const all = [dest, ...extras];
+    const per: Option[][] = all.map(() => []);
+    // Closer spots keep their shortest few, so the long trip's wanders aren't crowded out.
+    const merge = () => per.flatMap((list, i) => (i === 0 ? list : list.slice(0, 5))).sort((x, y) => x.durationS - y.durationS);
+    const build = (d: Place, i: number) =>
+      buildFunRoutes(here, d.coord, {
+        rules,
+        visited,
+        variants: i === 0 ? 2 : 1,
+        onRoute: (found) => {
+          if (id !== buildId.current) return;
+          per[i] = found.map((r) => ({ ...r, id: `d${i}:${r.id}`, destIdx: i }));
+          setRoutes(merge());
+        },
+      }).catch((e) => {
+        if (i === 0 && id === buildId.current) Alert.alert('Couldn’t find routes', e?.message ?? 'Check your connection and try again.');
+        return [];
       });
-  }, [dest, here, rules, visited, shuffle]);
+    // The closer spots are quick to plan, so they go first and the list fills in sooner.
+    (async () => {
+      for (let i = all.length - 1; i >= 0; i--) {
+        const found = await build(all[i], i);
+        if (id !== buildId.current) return;
+        per[i] = found.map((r) => ({ ...r, id: `d${i}:${r.id}`, destIdx: i }));
+        setRoutes(merge());
+      }
+      if (id === buildId.current && !merge().length) Alert.alert('No routes found', 'Mapbox couldn’t find a driving route there. Try another destination.');
+    })().finally(() => {
+      if (id === buildId.current) setBuilding(false);
+    });
+  }, [dest, extras, here, rules, visited, shuffle]);
 
   // Optional ?pick=<style> selects the first route of that style once they're in.
   useEffect(() => {
@@ -151,6 +172,15 @@ export default function FunRoutesScreen() {
   }, [building, routes, selected, params.pick]);
 
   const chosen = useMemo(() => routes.find((r) => r.id === selected) ?? null, [routes, selected]);
+  const allDests = useMemo(() => (dest ? [dest, ...extras] : []), [dest, extras]);
+  const chosenDest = chosen ? allDests[chosen.destIdx] ?? dest : dest;
+  // Short, medium, long: the spots by how far they are from you.
+  const tripOf = useMemo(() => {
+    const order = allDests.map((d, i) => ({ i, m: here ? Math.hypot(d.coord[0] - here[0], d.coord[1] - here[1]) : i })).sort((x, y) => x.m - y.m);
+    const tag = new Map<number, string>();
+    order.forEach((o, k) => tag.set(o.i, TRIP[k] ?? TRIP[TRIP.length - 1]));
+    return (i: number) => (allDests.length > 1 ? tag.get(i) ?? '' : '');
+  }, [allDests, here]);
 
   // Mystery: nothing on the map gives away the end, unless you're holding Peek.
   const [peek, setPeek] = useState(false);
@@ -164,18 +194,19 @@ export default function FunRoutesScreen() {
     }
     const pts: LngLat[] = [];
     if (here) pts.push(here);
-    if (dest) pts.push(dest.coord);
+    if (chosenDest) pts.push(chosenDest.coord);
+    if (!chosen) for (const d of allDests) pts.push(d.coord);
     for (const r of chosen ? [chosen] : routes) pts.push(...r.coords.filter((_, i) => i % 10 === 0));
     if (pts.length < 2) return;
     map.current?.fitToCoordinates(pts.map(toLatLng), {
       edgePadding: { top: insets.top + 90, right: 40, bottom: 40, left: 40 },
       animated: true,
     });
-  }, [routes.length, chosen, here, dest, hide, insets.top]);
+  }, [routes.length, chosen, chosenDest, allDests, here, hide, insets.top]);
 
   // When a mystery drive ends, reveal where it was going.
-  const reveal = useRef({ secret, name: dest?.name ?? '' });
-  reveal.current = { secret, name: dest?.name ?? '' };
+  const reveal = useRef({ secret, name: chosenDest?.name ?? '' });
+  reveal.current = { secret, name: chosenDest?.name ?? '' };
   useEffect(() => {
     const sub = JoyrideNav?.addListener('onNavigationEnded', ({ arrived }) => {
       const { secret: wasSecret, name } = reveal.current;
@@ -191,18 +222,6 @@ export default function FunRoutesScreen() {
     });
     return () => sub?.remove();
   }, []);
-
-  // Full mystery: once the routes are in, pick one of the fun ones at random and go.
-  const autoStarted = useRef(false);
-  useEffect(() => {
-    if (!auto || building || autoStarted.current || !routes.length || !here) return;
-    autoStarted.current = true;
-    const fun = routes.filter((r) => r.style !== 'fastest');
-    const pickFrom = fun.length ? fun : routes;
-    const route = pickFrom[Math.floor(Math.random() * pickFrom.length)];
-    setSelected(route.id);
-    goWith(route).finally(() => setAuto(false));
-  }, [auto, building, routes, here]);
 
   async function go() {
     if (chosen) await goWith(chosen);
@@ -226,10 +245,11 @@ export default function FunRoutesScreen() {
     }
   }
 
-  const destLabel = secret ? 'Mystery destination' : dest?.name ?? '';
+  const destLabel = secret ? (allDests.length > 1 ? `${allDests.length} mystery destinations` : 'Mystery destination') : chosen ? chosenDest?.name ?? '' : allDests.length > 1 ? `${allDests.length} surprise spots` : dest?.name ?? '';
 
   const arrive = chosen ? new Date(Date.now() + chosen.durationS * 1000).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
-  const extraMin = chosen && routes[0] ? Math.round((chosen.durationS - routes[0].durationS) / 60) : 0;
+  const quickestToChosen = chosen ? routes.find((r) => r.destIdx === chosen.destIdx && r.style === 'fastest') : null;
+  const extraMin = chosen && quickestToChosen ? Math.round((chosen.durationS - quickestToChosen.durationS) / 60) : 0;
 
   return (
     <View style={s.screen}>
@@ -244,7 +264,7 @@ export default function FunRoutesScreen() {
             chosen?.via
               .filter((v) => v.kind === 'culdesac' || v.kind === 'odd')
               .map((v, i) => <SpotDot key={`via-${i}`} at={v.coord} kind={v.kind as 'culdesac' | 'odd'} />)}
-          {dest && !hide && <PinTile at={dest.coord} />}
+          {!hide && (chosen ? (chosenDest ? [chosenDest] : []) : allDests).map((d, i) => <PinTile key={`dest-${i}`} at={d.coord} />)}
           {here && <LivePuck at={here} />}
         </MapView>
         <Vignette edge="top" height={insets.top + 90} />
@@ -352,12 +372,12 @@ export default function FunRoutesScreen() {
                       <Text style={t.caption}>min</Text>
                     </View>
                     <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={t.bodyStrong}>{item.title}</Text>
+                      <Text style={t.bodyStrong}>{item.style === 'fastest' && allDests.length > 1 ? 'Straight there' : item.title}</Text>
                       <Text style={t.caption} numberOfLines={2}>
-                        {secret ? (item.style === 'fastest' ? 'The quickest way' : describe([], item.culDeSacs, [])) : item.blurb}
+                        {secret ? mysteryBlurb(item) : item.blurb}
                       </Text>
                       <Text style={[t.caption, { color: p.text3 }]} numberOfLines={1}>
-                        {secret ? 'Mystery route' : formatMiles(item.distanceM)}
+                        {[tripOf(item.destIdx), secret ? 'Mystery route' : allDests.length > 1 ? `to ${allDests[item.destIdx]?.name} · ${formatMiles(item.distanceM)}` : formatMiles(item.distanceM)].filter(Boolean).join(' · ')}
                         {item.newShare != null && item.style !== 'fastest' ? ` · ${Math.round(item.newShare * 100)}% new to you` : ''}
                         {item.usesHighway && !secret ? ` · ${formatMiles(item.highwayM)} on a highway (no way around)` : ''}
                       </Text>
@@ -368,21 +388,6 @@ export default function FunRoutesScreen() {
               );
             }}
           />
-          {auto && (
-            <Animated.View entering={enterFade} exiting={exitFade} style={[StyleSheet.absoluteFill, s.autoCover, { paddingBottom: insets.bottom + 24 }]}>
-              <MaterialCommunityIcons name="help-circle-outline" size={44} color={p.brand} />
-              <TwoTone lead="Mystery drive." value="Just follow the turns." size="title" />
-              <Text style={[t.caption, { textAlign: 'center' }]}>
-                {starting ? 'Starting turn-by-turn…' : 'Joyride is picking the streets. You’ll find out where you are when you get there.'}
-              </Text>
-              <ActivityIndicator color={p.brand} />
-              <View style={[s.recordRow, { alignSelf: 'stretch' }]}>
-                <Text style={[t.body, { flex: 1 }]}>Record this drive</Text>
-                <Switch value={record} onValueChange={setRecord} trackColor={{ true: p.brand }} accessibilityLabel="Record this drive" />
-              </View>
-              {!starting && <PrimaryPill tone="glass" label="Let me pick the route" onPress={() => setAuto(false)} />}
-            </Animated.View>
-          )}
           <GlassCard radiusSize={32} glow style={[s.sheet, { paddingBottom: insets.bottom + 12 }]}>
             {chosen ? (
               <Animated.View entering={enterRise} layout={moveList} style={s.sheetTop}>
@@ -442,5 +447,4 @@ const useStyles = makeStyles((p, t) => ({
   sheet: { marginHorizontal: 0, paddingHorizontal: 16, paddingTop: 16, gap: 12, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
   sheetTop: { gap: 4 },
   recordRow: { flexDirection: 'row', alignItems: 'center' },
-  autoCover: { backgroundColor: p.canvas, alignItems: 'center', justifyContent: 'center', gap: 16, paddingHorizontal: 28, zIndex: 10 },
 }));

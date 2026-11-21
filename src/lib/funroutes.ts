@@ -76,6 +76,8 @@ export interface RouteOption {
   highwayM: number;
   /** Street-by-street routes: the streets in order (for checking and labels). */
   streets?: string[];
+  /** How many little neighborhood streets it uses (street-by-street routes). */
+  littleStreets?: number;
 }
 
 // ---- Pure geometry helpers (exported for tests) ---------------------------
@@ -714,6 +716,30 @@ export async function gatherCandidates(base: LngLat[], visited: VisitedStreets |
 
 // ---- Labels ------------------------------------------------------------------------
 
+/** What each kind of route is like, in words that give nothing away about where it goes. */
+const FEEL: Record<string, string> = {
+  'A little detour': 'Mostly the quick way, with one short side-street detour',
+  'Some side streets': 'The quick way, with a few side-street stretches',
+  'Half and half': 'Half main roads, half neighborhood streets',
+  'A few side streets': 'Main roads with side streets mixed in',
+  'Parallel streets': 'Quiet streets that run alongside the main roads',
+  'Side-street wander': 'Wanders through side streets',
+  'Neighborhood staircase': 'Zigzags up and down through neighborhoods',
+  'Neighborhood zigzag': 'Zigzags up and down through neighborhoods',
+  'Little streets': 'Mostly little neighborhood streets',
+  'Deep zigzag': 'Deep into the neighborhoods, back and forth',
+  'Every nook': 'Every nook and cranny along the way',
+};
+
+/** A short description for a mystery route: what it's like, never where it goes. */
+export function mysteryBlurb(r: RouteOption): string {
+  if (r.style === 'fastest') return 'Straight there, no detours';
+  const parts = [FEEL[r.title] ?? 'Winds through side streets'];
+  if (r.littleStreets) parts.push(`${r.littleStreets} little street${r.littleStreets === 1 ? '' : 's'}`);
+  if (r.culDeSacs) parts.push(`${r.culDeSacs} cul-de-sac${r.culDeSacs === 1 ? '' : 's'}`);
+  return parts.join(' · ');
+}
+
 export function describe(through: string[], culDeSacs: number, passes: string[]): string {
   const parts: string[] = [];
   if (through.length) parts.push(`Through ${joinNames(through)}`);
@@ -811,6 +837,7 @@ async function streetRoutes(
         usesHighway: noHighways && path.some((e) => g.edges[e].highway),
         highwayM: path.filter((e) => g.edges[e].highway).reduce((x, e) => x + g.edges[e].len, 0),
         streets: runs.filter((r) => r.len >= 60).map((r) => r.name || '(unnamed)'),
+        littleStreets: smallStreets,
       });
     });
   };
@@ -1061,14 +1088,13 @@ const SURPRISE_MAKI = new Set([...SCENIC_MAKI, ...LANDMARK_MAKI, 'cafe', 'ice-cr
  * It prefers a named, fun place near the random spot over a bare street corner.
  */
 export async function pickSurprise(
-  opts: { center: LngLat; radiusM: number; fromHere: boolean; area?: Place },
+  opts: { center: LngLat; radiusM: number; fromHere: boolean; area?: Place; ring?: [number, number] },
   rand: () => number = Math.random,
 ): Promise<Place> {
+  const [inner, outer] = opts.ring ?? (opts.fromHere ? [0.4, 1] : [0, 1]);
   const spot: LngLat = opts.area?.bbox
     ? randomPointInBox(opts.area.bbox, rand)
-    : opts.fromHere
-      ? randomPointInRing(opts.center, opts.radiusM * 0.4, opts.radiusM, rand)
-      : randomPointInRing(opts.center, 0, opts.radiusM, rand);
+    : randomPointInRing(opts.center, opts.radiusM * inner, opts.radiusM * outer, rand);
   try {
     const found = await nearby(spot, 2500, ['poi_label']);
     const fun = found.filter((f) => f.name && SURPRISE_MAKI.has(f.maki));
@@ -1084,4 +1110,44 @@ export async function pickSurprise(
     // fall through to the raw spot
   }
   return { name: 'A random spot', detail: 'Surprise destination', coord: spot, kind: 'spot' };
+}
+
+/**
+ * Two more surprise spots closer to `here` than the main one, so the menu has
+ * short trips as well as long ones. From here: in rings nearer to you. Over
+ * there: the parts of the circle (or area) nearest to you.
+ */
+export async function closerSurprises(
+  opts: { here: LngLat; main: Place; center: LngLat; radiusM: number; fromHere: boolean; area?: Place },
+  rand: () => number = Math.random,
+): Promise<Place[]> {
+  const mainM = distance(opts.here, opts.main.coord);
+  const picks: Promise<Place>[] = [];
+  if (opts.fromHere && !opts.area) {
+    // About 5 and 10 miles from you (and 2–3 for a short Surprise).
+    const mi = 1609.344;
+    const rings: [number, number][] = [[4, 6], [8, 12]];
+    if (opts.radiusM <= 10 * mi) rings.unshift([1.5, 3]);
+    for (const [a, b] of rings) {
+      if (a * mi > mainM * 0.8) continue;
+      picks.push(pickSurprise({ center: opts.here, radiusM: b * mi, fromHere: true, ring: [a / b, 1] }, rand));
+    }
+  } else {
+    // Random spots in the circle or area, the nearest to you and one partway.
+    const spots: LngLat[] = Array.from({ length: 24 }, () =>
+      opts.area?.bbox ? randomPointInBox(opts.area.bbox, rand) : randomPointInRing(opts.center, 0, opts.radiusM, rand),
+    ).sort((x, y) => distance(opts.here, x) - distance(opts.here, y));
+    for (const c of [spots[0], spots[Math.floor(spots.length / 3)]]) {
+      picks.push(pickSurprise({ center: c, radiusM: 800, fromHere: false }, rand));
+    }
+  }
+  const found = (await Promise.all(picks.map((p) => p.catch(() => null)))).filter((p): p is Place => !!p);
+  // Only spots that really are closer, and not on top of another one.
+  const out: Place[] = [];
+  for (const p of found.sort((x, y) => distance(opts.here, x.coord) - distance(opts.here, y.coord))) {
+    if (distance(opts.here, p.coord) > mainM * 0.8) continue;
+    if ([opts.main, ...out].some((o) => distance(o.coord, p.coord) < 1500)) continue;
+    out.push(p);
+  }
+  return out;
 }

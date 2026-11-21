@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ContextChip, GlassCard, GlassRow, Label, PrimaryPill, ScreenHeader, Segmented, TwoTone } from '@/components/ui';
 import Animated from 'react-native-reanimated';
 import { enterFade, enterRise, exitFade, moveList } from '@/lib/motion';
-import { pickSurprise } from '@/lib/funroutes';
+import { closerSurprises, pickSurprise } from '@/lib/funroutes';
 import { AreaCircle } from '@/components/AreaCircle';
 import type { LngLat } from '@/lib/geo';
 import { searchAreas, type Place } from '@/lib/places';
@@ -77,13 +77,13 @@ export default function SurpriseScreen() {
     setBusy(true);
     try {
       const there = mode === 'there';
-      const dest = await pickSurprise({
-        center: there ? (thereCenter ?? here) : here,
-        radiusM: (there ? thereMiles : miles) * METERS_PER_MILE,
-        fromHere: !there,
-        // A city or county's own outline beats a circle when we have it.
-        area: there && area?.bbox ? area : undefined,
-      });
+      const center = there ? (thereCenter ?? here) : here;
+      const radiusM = (there ? thereMiles : miles) * METERS_PER_MILE;
+      // A city or county's own outline beats a circle when we have it.
+      const outline = there && area?.bbox ? area : undefined;
+      const dest = await pickSurprise({ center, radiusM, fromHere: !there, area: outline });
+      // Two closer spots too, so the list has short trips as well as long ones.
+      const more = await closerSurprises({ here, main: dest, center, radiusM, fromHere: !there, area: outline }).catch(() => []);
       router.push({
         pathname: '/routes',
         params: {
@@ -91,8 +91,7 @@ export default function SurpriseScreen() {
           lat: String(dest.coord[1]),
           name: dest.name,
           secret: secret ? '1' : '0',
-          // Over there + secret: no menu, no map, Joyride picks the route and just goes.
-          auto: there && secret ? '1' : '0',
+          more: JSON.stringify(more.map((m) => ({ lng: m.coord[0], lat: m.coord[1], name: m.name }))),
         },
       });
     } catch (e: any) {
@@ -118,7 +117,7 @@ export default function SurpriseScreen() {
           <Animated.View entering={enterRise} exiting={exitFade} layout={moveList} style={{ gap: 10 }}>
             <Label>END UP ANYWHERE IN THE CIRCLE</Label>
             {here ? (
-              <AreaCircle here={here} miles={thereMiles} area={area} onCenter={setThereCenter} onTouch={setMapTouched} />
+              <AreaCircle here={here} miles={thereMiles} area={area} onCenter={setThereCenter} onTouch={setMapTouched} onMiles={setThereMiles} />
             ) : (
               <GlassCard radiusSize={24} style={s.mapWait}>
                 <ActivityIndicator color={p.text2} />
@@ -178,7 +177,7 @@ export default function SurpriseScreen() {
         <GlassRow
           icon="eye-off-outline"
           title="Keep it a secret"
-          detail={mode === 'there' ? 'Joyride picks the spot and the route and just goes. You find out when you get there.' : 'Don’t show where we’re going until we get there'}
+          detail="Don’t show where we’re going until we get there"
           right={<Switch value={secret} onValueChange={setSecret} trackColor={{ true: p.brand }} accessibilityLabel="Keep it a secret" />}
         />
         </Animated.View>

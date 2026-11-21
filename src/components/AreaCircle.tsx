@@ -1,5 +1,5 @@
 // Surprise → Over there: a map with a circle on it. Drag the map to move the
-// circle anywhere; the distance chips grow or shrink it (on a spring, while the
+// circle anywhere; pinch to resize it, or use the distance chips to grow or shrink it (on a spring, while the
 // map zooms to keep it in view). Joyride then picks a spot inside the circle.
 // When a city or county with its own outline is picked instead, the map frames
 // that area and the circle steps aside.
@@ -34,6 +34,7 @@ export function AreaCircle({
   area,
   onCenter,
   onTouch,
+  onMiles,
 }: {
   here: LngLat;
   miles: number;
@@ -43,6 +44,8 @@ export function AreaCircle({
   onCenter: (c: LngLat) => void;
   /** True while a finger is on the map (so the screen doesn't scroll at the same time). */
   onTouch?: (down: boolean) => void;
+  /** The circle's size after you pinch the map to resize it (miles, to the half mile). */
+  onMiles?: (miles: number) => void;
 }) {
   const p = useTheme();
   const s = useStyles();
@@ -58,13 +61,25 @@ export function AreaCircle({
   const mpp = useSharedValue(50);
   const shown = useSharedValue(outline ? 0 : 1);
 
+  // Pinch to resize: the circle keeps its size on screen, so zooming the map
+  // in or out changes how far it reaches. The buttons zoom the map for you
+  // (and the circle springs to its new size while the map catches up).
+  const [live, setLive] = useState(miles);
+  const zooming = useRef(0); // until when the map is moving on its own (ms)
+  const pinched = useRef<number | null>(null);
+  const fitM = () => (size ? (FILL / 2) * Math.min(size.w, size.h) : 0);
+
   const frame = (c: LngLat) => {
     if (!size) return;
+    zooming.current = Date.now() + 700;
     map.current?.animateToRegion(regionFor(c, miles * METERS_PER_MILE, size.w, size.h), 450);
   };
 
-  // New distance: grow or shrink the circle, and zoom so it stays in view.
+  // New distance from the buttons: grow or shrink the circle, and zoom so it stays in view.
   useEffect(() => {
+    setLive(miles);
+    if (pinched.current != null && Math.abs(pinched.current - miles) < 0.01) return; // came from a pinch
+    pinched.current = null;
     radius.value = withSpring(miles * METERS_PER_MILE, springUI);
     if (!outline) frame(center.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -91,9 +106,20 @@ export function AreaCircle({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [area, size]);
 
-  const track = (r: Region) => {
+  const track = (r: Region, done = false) => {
     if (!size) return;
-    mpp.value = (r.longitudeDelta * 111320 * Math.cos((r.latitude * Math.PI) / 180)) / size.w;
+    const m = (r.longitudeDelta * 111320 * Math.cos((r.latitude * Math.PI) / 180)) / size.w;
+    mpp.value = m;
+    if (outline || Date.now() < zooming.current) return;
+    // Your own pinch or drag: the circle stays put on screen and its reach follows the zoom.
+    const reach = Math.min(50, Math.max(1, (m * fitM()) / METERS_PER_MILE));
+    radius.value = reach * METERS_PER_MILE;
+    const half = Math.round(reach * 2) / 2;
+    setLive(half);
+    if (done && Math.abs(half - miles) >= 0.5) {
+      pinched.current = half;
+      onMiles?.(half);
+    }
   };
 
   const circle = useAnimatedStyle(() => {
@@ -118,9 +144,9 @@ export function AreaCircle({
           showsUserLocation
           rotateEnabled={false}
           pitchEnabled={false}
-          onRegionChange={track}
+          onRegionChange={(r) => track(r)}
           onRegionChangeComplete={(r) => {
-            track(r);
+            track(r, true);
             if (outline) return;
             center.current = [r.longitude, r.latitude];
             onCenter(center.current);
@@ -134,7 +160,7 @@ export function AreaCircle({
       <View style={s.topRow} pointerEvents="box-none">
         <GlassCard radiusSize={16} strong style={s.label}>
           <Text style={[s.labelText, { color: p.mint }]} numberOfLines={1}>
-            {outline ? `Anywhere in ${area!.name}` : `Anywhere within ${miles} mi`}
+            {outline ? `Anywhere in ${area!.name}` : `Anywhere within ${live} mi`}
           </Text>
         </GlassCard>
         {!outline && (
@@ -151,7 +177,7 @@ export function AreaCircle({
       </View>
       {!outline && (
         <Text style={[s.hint, { color: p.text2 }]} pointerEvents="none">
-          Drag the map to move the circle
+          Drag to move · pinch to resize
         </Text>
       )}
     </View>
