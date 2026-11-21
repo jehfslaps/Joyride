@@ -304,6 +304,6 @@ function preparingLabel(f: number) {
 const useStyles = makeStyles((p) => ({
   screen: { flex: 1, backgroundColor: p.canvas },
   mapWrap: { height: '48%', overflow: 'hidden' },
-  holdHint: { position: 'absolute', bottom: 10, alignSelf: 'center', fontSize: 12, fontWeight: '600' },
+  holdHint: { position: 'absolute', bottom: 34, alignSelf: 'center', fontSize: 12, fontWeight: '600' },
   topBar: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', gap: 10 },
 }));

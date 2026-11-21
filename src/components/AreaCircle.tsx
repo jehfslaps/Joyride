@@ -165,5 +165,5 @@ const useStyles = makeStyles(() => ({
   topRow: { position: 'absolute', top: 10, left: 10, right: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   label: { height: 36, paddingHorizontal: 14, justifyContent: 'center' },
   labelText: { fontSize: 14, fontWeight: '700' },
-  hint: { position: 'absolute', bottom: 10, alignSelf: 'center', fontSize: 12, fontWeight: '600' },
+  hint: { position: 'absolute', bottom: 34, alignSelf: 'center', fontSize: 12, fontWeight: '600' },
 }));
