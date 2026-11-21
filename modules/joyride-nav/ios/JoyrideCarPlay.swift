@@ -1,4 +1,5 @@
 import CarPlay
+import Combine
 import CoreLocation
 import Foundation
 import MapboxDirections
@@ -103,8 +104,14 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     in carPlayTemplate: CPTemplate,
     for activity: CarPlayActivity
   ) -> [CPMapButton]? {
-    guard activity == .navigating else { return nil }
-    return MainActor.assumeIsolated { JoyrideCarPlay.shared.drivingButtons() }
+    switch activity {
+    case .navigating:
+      return MainActor.assumeIsolated { JoyrideCarPlay.shared.drivingButtons() }
+    case .browsing:
+      return MainActor.assumeIsolated { JoyrideCarPlay.shared.browsingButtons(carPlayManager) }
+    default:
+      return nil
+    }
   }
 
   nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, didSetup navigationMapView: NavigationMapView) {}
@@ -116,7 +123,8 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     for activity: CarPlayActivity,
     cameraState: NavigationCameraState
   ) -> [CPBarButton]? {
-    nil
+    guard activity == .browsing else { return nil }
+    return MainActor.assumeIsolated { [JoyrideCarPlay.shared.recordButton] }
   }
 
   nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, selectedPreviewFor trip: CPTrip, using routeChoice: CPRouteChoice) {}
@@ -139,7 +147,11 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
 
   nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, didPresent navigationViewController: CarPlayNavigationViewController) {
     // Same as the phone: the part you've driven turns gray behind you.
-    MainActor.assumeIsolated { navigationViewController.routeLineTracksTraversal = true }
+    MainActor.assumeIsolated {
+      navigationViewController.routeLineTracksTraversal = true
+      JoyrideCompass.apply(to: navigationViewController.navigationMapView, animated: false)
+      JoyrideCarPlay.shared.watchArrows(in: navigationViewController)
+    }
   }
 
   nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, shouldPresentArrivalUIFor waypoint: Waypoint) -> Bool {
@@ -158,7 +170,12 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
   nonisolated func carPlayManagerWillEndNavigation(_ carPlayManager: CarPlayManager, byCanceling canceled: Bool) {}
 
   nonisolated func carPlayManagerDidEndNavigation(_ carPlayManager: CarPlayManager, byCanceling canceled: Bool) {
-    MainActor.assumeIsolated { JoyrideNavigator.shared.endFromCarPlay(canceled: canceled) }
+    MainActor.assumeIsolated {
+      JoyrideCarPlay.shared.arrowWatch = nil
+      JoyrideNavigator.shared.endFromCarPlay(canceled: canceled)
+      // Still recording: keep the map following you.
+      if JoyrideCarPlay.shared.recording { JoyrideCarPlay.shared.followWhileRecording(true) }
+    }
   }
 
   // MARK: Driving buttons and cleanup
@@ -170,18 +187,116 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
   func drivingButtons() -> [CPMapButton] {
     let recenter = CPMapButton { _ in MainActor.assumeIsolated { JoyrideCarPlay.shared.follow() } }
     recenter.image = Self.symbol("location.fill")
+    let compass = compassButton { JoyrideCarPlay.shared.manager?.navigationMapView }
     let zoomIn = CPMapButton { _ in MainActor.assumeIsolated { JoyrideCarPlay.shared.zoom(by: 1) } }
     zoomIn.image = Self.symbol("plus")
     let zoomOut = CPMapButton { _ in MainActor.assumeIsolated { JoyrideCarPlay.shared.zoom(by: -1) } }
     zoomOut.image = Self.symbol("minus")
-    return [recenter, zoomIn, zoomOut]
+    return [recenter, compass, zoomIn, zoomOut]
+  }
+
+  /// Browsing the map (and recording): Mapbox's recenter and zoom, plus the compass.
+  func browsingButtons(_ manager: CarPlayManager) -> [CPMapButton]? {
+    guard let mapVC = manager.carPlayMapViewController else { return nil }
+    let compass = compassButton { JoyrideCarPlay.shared.manager?.carPlayMapViewController?.navigationMapView }
+    return [mapVC.recenterButton, compass, mapVC.zoomInButton, mapVC.zoomOutButton]
+  }
+
+  private func compassButton(_ view: @escaping @MainActor () -> NavigationMapView?) -> CPMapButton {
+    let button = CPMapButton { button in
+      MainActor.assumeIsolated {
+        JoyrideCompass.toggle(on: view())
+        button.image = Self.symbol(JoyrideCompass.symbolName)
+      }
+    }
+    button.image = Self.symbol(JoyrideCompass.symbolName)
+    return button
+  }
+
+  // MARK: Turn arrows
+
+  /// Mapbox draws a left-turn arrow as a right arrow marked "show mirrored",
+  /// and the car screen can drop that mark, so lefts showed as rights. After
+  /// each new instruction, swap in arrows that are really drawn facing left.
+  var arrowWatch: AnyCancellable?
+
+  func watchArrows(in controller: CarPlayNavigationViewController) {
+    let navigation = JoyrideNavigator.shared.sharedProvider().mapboxNavigation
+    arrowWatch = navigation.navigation().bannerInstructions
+      .receive(on: DispatchQueue.main)
+      .sink { [weak controller] _ in
+        // Let Mapbox put its maneuvers up first.
+        DispatchQueue.main.async { MainActor.assumeIsolated { Self.fixArrows(in: controller) } }
+      }
+    Self.fixArrows(in: controller)
+  }
+
+  static func fixArrows(in controller: CarPlayNavigationViewController?) {
+    guard let controller,
+          let session = Mirror(reflecting: controller).children.first(where: { $0.label == "carSession" })?.value as? CPNavigationSession
+    else { return }
+    let maneuvers = session.upcomingManeuvers
+    var changed = false
+    for maneuver in maneuvers {
+      guard let set = maneuver.symbolSet else { continue }
+      let light = set.lightContentImage
+      let dark = set.darkContentImage
+      guard light.imageOrientation == .upMirrored || dark.imageOrientation == .upMirrored else { continue }
+      maneuver.symbolSet = CPImageSet(lightContentImage: baked(light), darkContentImage: baked(dark))
+      changed = true
+    }
+    if changed { session.upcomingManeuvers = maneuvers }
+  }
+
+  /// Redraws an image that's only marked as mirrored so its pixels really face the other way.
+  private static func baked(_ image: UIImage) -> UIImage {
+    guard image.imageOrientation == .upMirrored else { return image }
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = image.scale
+    return UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+      image.draw(in: CGRect(origin: .zero, size: image.size))
+    }
+  }
+
+  // MARK: Recording
+
+  private(set) var recording = false
+
+  lazy var recordButton: CPBarButton = CPBarButton(title: "Record") { _ in
+    MainActor.assumeIsolated { JoyrideCarPlay.shared.tappedRecord() }
+  }
+
+  private func tappedRecord() {
+    JoyrideNavModule.requestRecord(start: !recording)
+  }
+
+  /// From the app: whether a drive is recording now (it may have started on the phone).
+  func setRecording(_ on: Bool, message: String?) {
+    if on != recording {
+      recording = on
+      recordButton.title = on ? "Stop" : "Record"
+      if manager?.carPlayNavigationViewController == nil { followWhileRecording(on) }
+    }
+    if let message { alert(message) }
+  }
+
+  /// While recording (and not navigating), the car's map follows you around.
+  func followWhileRecording(_ on: Bool) {
+    guard isConnected else { return }
+    let navigation = JoyrideNavigator.shared.sharedProvider().mapboxNavigation
+    if on {
+      navigation.tripSession().startFreeDrive()
+      manager?.carPlayMapViewController?.navigationMapView.navigationCamera.update(cameraState: .following)
+      JoyrideCompass.apply(to: manager?.carPlayMapViewController?.navigationMapView, animated: false)
+    } else if !JoyrideNavigator.shared.hasActiveSession {
+      navigation.tripSession().setToIdle()
+    }
   }
 
   /// Zooming pauses following you (like Apple Maps); the location button picks it back up.
   func zoom(by step: Double) {
-    guard let view = manager?.navigationMapView else { return }
+    guard let view = manager?.navigationMapView, let map = view.mapView.mapboxMap else { return }
     view.navigationCamera.stop()
-    let map = view.mapView.mapboxMap
     var camera = CameraOptions(cameraState: map.cameraState)
     camera.zoom = min(19.5, max(4, map.cameraState.zoom + step))
     view.mapView.camera.ease(to: camera, duration: 0.3)
@@ -323,6 +438,8 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     Task { @MainActor in
       do {
         try await JoyrideNavigator.shared.startCarPlayReplay(trace: trace, from: here, joinNearest: joinNearest)
+        // Like the phone's "Record this drive" (on by default): record drives started in the car.
+        if !self.recording { JoyrideNavModule.requestRecord(start: true) }
         self.manager?.interfaceController?.popToRootTemplate(animated: false, completion: nil)
         self.manager?.beginNavigationWithCarPlay(using: here)
       } catch {
@@ -331,7 +448,7 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     }
   }
 
-  private func alert(_ message: String) {
+  func alert(_ message: String) {
     let ok = CPAlertAction(title: "OK", style: .cancel) { _ in
       MainActor.assumeIsolated { JoyrideCarPlay.shared.manager?.interfaceController?.dismissTemplate(animated: true, completion: nil) }
     }

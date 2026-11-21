@@ -14,7 +14,22 @@ public final class JoyrideNavModule: Module {
   public func definition() -> ModuleDefinition {
     Name("JoyrideNav")
 
-    Events("onNavigationEnded")
+    Events("onNavigationEnded", "onCarPlayRecord")
+
+    OnCreate { JoyrideNavModule.current = self }
+
+    /// Tells CarPlay whether a drive is being recorded (for its Record / Stop
+    /// button), with an optional message to show on the car screen.
+    Function("setRecording") { (on: Bool, message: String?) in
+      Task { @MainActor in JoyrideCarPlay.shared.setRecording(on, message: message) }
+    }
+
+    /// A Record or Stop tapped on CarPlay while JavaScript wasn't listening yet: "start", "stop" or null.
+    Function("takeRecordRequest") { () -> String? in
+      let pending = JoyrideNavModule.pendingRecord
+      JoyrideNavModule.pendingRecord = nil
+      return pending
+    }
 
     /// Whether the native navigation engine is present in this build.
     Constant("isAvailable") { true }
@@ -64,6 +79,18 @@ public final class JoyrideNavModule: Module {
           promise.reject("E_NAVIGATION", error.localizedDescription)
         }
       }
+    }
+  }
+
+  /// The live module, so CarPlay can ask the app's JavaScript to start or stop recording.
+  static weak var current: JoyrideNavModule?
+  static var pendingRecord: String?
+
+  static func requestRecord(start: Bool) {
+    if let module = current {
+      module.sendEvent("onCarPlayRecord", ["start": start])
+    } else {
+      pendingRecord = start ? "start" : "stop"
     }
   }
 
@@ -202,6 +229,8 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
       // The first floating button is the route overview, which would show the end.
       controller.floatingButtons = Array(buttons.dropFirst())
     }
+    // Compass: heading-up or north-up, like Apple Maps.
+    controller.floatingButtons = (controller.floatingButtons ?? []) + [JoyrideCompass.phoneButton(for: controller)]
     // The bottom bar shows the whole drive, not just the piece being guided.
     replay.onWholeProgress = { [weak banner] meters, seconds in
       DispatchQueue.main.async {
@@ -217,6 +246,7 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     presenter.present(controller, animated: true) {
       MainActor.assumeIsolated {
         replay.attach()
+        JoyrideCompass.apply(to: controller.navigationMapView, animated: false)
         JoyrideCarPlay.shared.mirrorNavigation(from: here)
       }
     }

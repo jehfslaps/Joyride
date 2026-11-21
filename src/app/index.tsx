@@ -27,7 +27,7 @@ import {
   Vignette,
 } from '@/components/ui';
 import { useHere } from '@/lib/useHere';
-import { formatDuration, formatMiles, lineLength, type LngLat } from '@/lib/geo';
+import { distance, bearing, formatDuration, formatMiles, lineLength, type LngLat } from '@/lib/geo';
 import {
   discardRecording,
   getRecorderState,
@@ -109,13 +109,30 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Compass: heading-up turns the map so the way you're driving points up
+  // (like Apple Maps); tap again for north at the top.
+  const [headingUp, setHeadingUp] = useState(false);
+  const course = useRef(0);
+
   // Keep the live trail in view.
   const last = points[points.length - 1];
   useEffect(() => {
     if (state === 'recording' && last) {
-      map.current?.animateCamera({ center: { latitude: last[1], longitude: last[0] } }, { duration: 600 });
+      // Which way you're heading: from a point at least 15 m back, so GPS jitter doesn't spin the map.
+      for (let i = points.length - 2; i >= Math.max(0, points.length - 40); i--) {
+        const from: LngLat = [points[i][0], points[i][1]];
+        if (distance(from, [last[0], last[1]]) >= 15) {
+          course.current = bearing(from, [last[0], last[1]]);
+          break;
+        }
+      }
+      map.current?.animateCamera(
+        { center: { latitude: last[1], longitude: last[0] }, heading: headingUp ? course.current : 0 },
+        { duration: 600 },
+      );
     }
-  }, [state, last]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, last, headingUp]);
 
   const coords = useMemo(() => points.map((p) => ({ latitude: p[1], longitude: p[0] })), [points]);
   const miles = useMemo(() => lineLength(points.map((p) => [p[0], p[1]] as LngLat)), [points]);
@@ -205,6 +222,15 @@ export default function Home() {
         </MapView>
         <Vignette edge="top" height={insets.top + 110} />
         <Vignette edge="bottom" height={90} />
+        {recording && (
+          <Animated.View entering={enterFade} exiting={exitFade} style={s.compass}>
+            <RoundButton
+              icon={headingUp ? 'navigation-variant' : 'compass-outline'}
+              label={headingUp ? 'Heading up. Tap for north up.' : 'North up. Tap to turn the map with you.'}
+              onPress={() => setHeadingUp((v) => !v)}
+            />
+          </Animated.View>
+        )}
         <View style={[s.mapTop, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
           <Text style={s.brand} pointerEvents="none">
             <Text style={{ color: p.text3, fontWeight: '400' }}>joy</Text>ride
@@ -317,6 +343,7 @@ const useStyles = makeStyles((p, t) => ({
   screen: { flex: 1, backgroundColor: p.canvas },
   mapWrap: { width: '100%', overflow: 'hidden' },
   mapTop: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  compass: { position: 'absolute', right: 16, bottom: 20 },
   brand: { ...t.display, fontWeight: '700' },
   recPill: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, height: 36 },
   recDot: { width: 9, height: 9, borderRadius: 5, shadowOpacity: 0.9, shadowRadius: 8, shadowOffset: { width: 0, height: 0 } },
