@@ -46,7 +46,7 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
   func connect(scene: CPTemplateApplicationScene, interfaceController: CPInterfaceController, window: CPWindow) {
     let provider = JoyrideNavigator.shared.sharedProvider()
     let manager = self.manager ?? CarPlayManager(navigationProvider: provider, styles: joyrideStyles())
-    // Browsing the map shouldn't count as a navigation session (Mapbox bills those).
+    // Live location is started by liveOnCar() below, so the dot always moves with you.
     manager.startFreeDriveAutomatically = false
     manager.delegate = self
     self.manager = manager
@@ -69,12 +69,29 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     // A drive already running on the phone continues on the car screen.
     if JoyrideNavigator.shared.hasActiveSession, let here = Self.currentLocation() {
       manager.beginNavigationWithCarPlay(using: here)
+    } else {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { MainActor.assumeIsolated { JoyrideCarPlay.shared.liveOnCar() } }
     }
+  }
+
+  /// Whenever the car screen is connected and nothing is being navigated:
+  /// live location on, so your dot moves with you in real time and the map
+  /// follows (until you zoom or pan; the location button brings it back).
+  func liveOnCar() {
+    guard isConnected, !JoyrideNavigator.shared.hasActiveSession else { return }
+    JoyrideNavigator.shared.sharedProvider().mapboxNavigation.tripSession().startFreeDrive()
+    let view = manager?.carPlayMapViewController?.navigationMapView
+    view?.navigationCamera.update(cameraState: .following)
+    JoyrideCompass.apply(to: view, animated: false)
   }
 
   func disconnect(scene: CPTemplateApplicationScene, interfaceController: CPInterfaceController, window: CPWindow) {
     manager?.templateApplicationScene(scene, didDisconnect: interfaceController, from: window)
     isConnected = false
+    // Off the car screen and not navigating: stop live location (saves battery).
+    if !JoyrideNavigator.shared.hasActiveSession {
+      JoyrideNavigator.shared.sharedProvider().mapboxNavigation.tripSession().setToIdle()
+    }
   }
 
   /// Shows guidance that was started on the phone on the car screen too.
@@ -306,17 +323,9 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     (manager?.interfaceController?.rootTemplate as? CPMapTemplate)?.automaticallyHidesNavigationBar = !on
   }
 
-  /// While recording (and not navigating), the car's map follows you around.
+  /// Recording or not, the car map keeps showing where you are live.
   func followWhileRecording(_ on: Bool) {
-    guard isConnected else { return }
-    let navigation = JoyrideNavigator.shared.sharedProvider().mapboxNavigation
-    if on {
-      navigation.tripSession().startFreeDrive()
-      manager?.carPlayMapViewController?.navigationMapView.navigationCamera.update(cameraState: .following)
-      JoyrideCompass.apply(to: manager?.carPlayMapViewController?.navigationMapView, animated: false)
-    } else if !JoyrideNavigator.shared.hasActiveSession {
-      navigation.tripSession().setToIdle()
-    }
+    liveOnCar()
   }
 
   /// Zooming pauses following you (like Apple Maps); the location button picks it back up.
@@ -341,6 +350,8 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
       if let here = Self.currentLocation() {
         view.mapView.camera.ease(to: CameraOptions(center: here, zoom: 14.5, bearing: 0, pitch: 0), duration: 0.6)
       }
+      // And keep following you live from here.
+      JoyrideCarPlay.shared.liveOnCar()
     }
     tidy()
     // Mapbox swaps the map template back in after ending; tidy again once it has.

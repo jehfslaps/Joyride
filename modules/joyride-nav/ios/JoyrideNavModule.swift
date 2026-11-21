@@ -175,6 +175,7 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
   func endFromCarPlay(canceled: Bool) {
     session?.stop()
     session = nil
+    // Back to just showing where you are (live on the car screen, idle otherwise).
     sharedProvider().mapboxNavigation.tripSession().setToIdle()
     if let phone = phoneController {
       phoneController = nil
