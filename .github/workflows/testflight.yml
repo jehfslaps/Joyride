@@ -117,6 +117,17 @@ jobs:
           echo "PROFILE_NAME=$(cat "$S/profile-name")" >> "$GITHUB_ENV"
           rm -f "$S/dist.key" "$S/dist.p12"
 
+          # What the profile allows, for the log.
+          security cms -D -i "$S/app.mobileprovision" > "$S/profile.plist"
+          /usr/libexec/PlistBuddy -c "Print :Entitlements" "$S/profile.plist" || true
+          if [ "$JOYRIDE_CARPLAY" = "1" ]; then
+            if [ "$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.carplay-maps' "$S/profile.plist" 2>/dev/null)" != "true" ]; then
+              echo "::error::The App Store profile doesn't include CarPlay yet. Turn on CarPlay Navigation for the app's identifier at https://developer.apple.com/account/resources/identifiers/list and run this again."
+              exit 1
+            fi
+            echo "CarPlay navigation is in the profile."
+          fi
+
       - name: Generate the iOS project
         run: npx expo prebuild --platform ios --no-install
 
