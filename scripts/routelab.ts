@@ -20,6 +20,8 @@ const TRIPS: { name: string; to: LngLat; rules: RoadRules; cs: boolean }[] = [
   // Long Surprise-style trips with both Avoid switches on.
   { name: 'glendale', to: [-118.2553, 34.1457], rules: NONE, cs: false },
   { name: 'long-beach', to: [-118.1937, 33.7683], rules: NONE, cs: false },
+  // The backup planner (used when the street map can't be loaded) on the same long trip.
+  { name: 'glendale-backup', to: [-118.2553, 34.1457], rules: NONE, cs: false, backup: true } as any,
 ];
 
 let seed = 7;
@@ -162,7 +164,7 @@ async function main() {
       setContinueStraight(trip.cs);
       const tag = `${trip.name}${rules.noFreeways ? '-nofwy' : ''}${rules.noHighways ? '-nohwy' : ''}${trip.cs ? '-cs' : ''}`;
       const t0 = Date.now();
-      const routes = await buildFunRoutes(uptownWhittier, trip.to, { rules, rand });
+      const routes = await buildFunRoutes(uptownWhittier, trip.to, { rules, rand, streetByStreet: !trip.backup });
       log(`\n=== ${tag}: ${routes.length} routes in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
       const base = routes.find((r) => r.style === 'fastest')?.coords ?? null;
       let k = 0;

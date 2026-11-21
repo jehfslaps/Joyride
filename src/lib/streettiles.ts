@@ -130,9 +130,25 @@ function clipToTile(pts: { x: number; y: number }[], extent: number): { x: numbe
   return pieces;
 }
 
+/** Fetches a tile, trying again (up to 3 times) when the phone's connection hiccups or Mapbox says "slow down". */
+async function fetchTile(url: string): Promise<Response> {
+  let last: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (res.ok || res.status === 404 || (res.status < 500 && res.status !== 429)) return res;
+      last = new Error(`Street tile ${res.status}`);
+    } catch (e) {
+      last = e;
+    }
+    await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
+  }
+  throw last;
+}
+
 async function loadTile(x: number, y: number): Promise<Line[]> {
   const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/${Z}/${x}/${y}.vector.pbf?access_token=${MAPBOX_TOKEN}`;
-  const res = await fetch(url);
+  const res = await fetchTile(url);
   if (res.status === 404) return [];
   if (!res.ok) throw new Error(`Street tile ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
@@ -327,10 +343,21 @@ export function linesToWays(lines: Line[]): OsmWay[] {
 export async function streetsFromTiles(line: LngLat[], halfWidthM: number): Promise<OsmWay[]> {
   const tiles = tilesAlong(line, halfWidthM);
   const lines: Line[] = [];
+  let failed = 0;
   for (let i = 0; i < tiles.length; i += 8) {
-    const batch = await Promise.all(tiles.slice(i, i + 8).map(([x, y]) => loadTile(x, y)));
+    const batch = await Promise.all(
+      tiles.slice(i, i + 8).map(([x, y]) =>
+        loadTile(x, y).catch(() => {
+          failed++;
+          return [] as Line[];
+        }),
+      ),
+    );
     for (const b of batch) lines.push(...b);
   }
+  // A few missing tiles at the edges are fine (the route just won't wander
+  // there); too many and the map would have holes, so let the caller fall back.
+  if (failed > Math.max(1, tiles.length * 0.12)) throw new Error(`${failed} of ${tiles.length} street tiles failed`);
   addJunctions(lines);
   return linesToWays(lines);
 }

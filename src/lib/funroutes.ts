@@ -276,11 +276,12 @@ export interface Level {
 }
 
 export const LEVELS: Level[] = [
-  { amplitude: 800, wavelength: 5000, spacing: 1100, maxStraight: 1200, culPer10km: 1, minCul: 1, maxCul: 2, maxSpots: 30, odds: 1, budget: 2, title: 'A few side streets' },
-  { amplitude: 1000, wavelength: 4200, spacing: 800, maxStraight: 900, culPer10km: 1.5, minCul: 1, maxCul: 4, maxSpots: 45, odds: 1, budget: 2.8, title: 'Side-street wander' },
-  { amplitude: 1200, wavelength: 3600, spacing: 550, maxStraight: 650, culPer10km: 2.5, minCul: 2, maxCul: 6, maxSpots: 70, odds: 2, budget: 3.8, title: 'Neighborhood zigzag' },
-  { amplitude: 1400, wavelength: 3000, spacing: 400, maxStraight: 500, culPer10km: 4, minCul: 2, maxCul: 9, maxSpots: 100, odds: 2, budget: 5, title: 'Deep zigzag' },
-  { amplitude: 1600, wavelength: 2600, spacing: 280, maxStraight: 400, culPer10km: 6, minCul: 3, maxCul: 12, maxSpots: 140, odds: 3, budget: 7, title: 'Every nook' },
+  { amplitude: 500, wavelength: 6000, spacing: 1500, maxStraight: 3000, culPer10km: 0.5, minCul: 0, maxCul: 1, maxSpots: 12, odds: 0, budget: 1.2, title: 'A little detour' },
+  { amplitude: 800, wavelength: 5000, spacing: 1100, maxStraight: 1200, culPer10km: 1, minCul: 1, maxCul: 2, maxSpots: 30, odds: 1, budget: 1.45, title: 'A few side streets' },
+  { amplitude: 1000, wavelength: 4200, spacing: 800, maxStraight: 900, culPer10km: 1.5, minCul: 1, maxCul: 4, maxSpots: 45, odds: 1, budget: 1.8, title: 'Side-street wander' },
+  { amplitude: 1200, wavelength: 3600, spacing: 550, maxStraight: 650, culPer10km: 2.5, minCul: 2, maxCul: 6, maxSpots: 70, odds: 2, budget: 2.4, title: 'Neighborhood zigzag' },
+  { amplitude: 1400, wavelength: 3000, spacing: 400, maxStraight: 500, culPer10km: 4, minCul: 2, maxCul: 9, maxSpots: 100, odds: 2, budget: 3, title: 'Deep zigzag' },
+  { amplitude: 1600, wavelength: 2600, spacing: 280, maxStraight: 400, culPer10km: 6, minCul: 3, maxCul: 12, maxSpots: 140, odds: 3, budget: 4, title: 'Every nook' },
 ];
 
 /** Spots closer than this to the quick way just touch the corner of a side street. */
@@ -975,7 +976,7 @@ export async function buildFunRoutes(origin: LngLat, dest: LngLat, opts: BuildOp
           r = again;
         }
         // Over its time budget: keep every other spot (cul-de-sacs and odd spots stay) and route again, up to twice.
-        for (let pass = 0; level.budget > 0 && pass < 2 && r.durationS > base.durationS * level.budget; pass++) {
+        for (let pass = 0; level.budget > 0 && pass < 3 && r.durationS > base.durationS * level.budget; pass++) {
           const fewer = spots.filter((sp, i) => sp.kind === 'culdesac' || sp.kind === 'odd' || i % 2 === 0);
           if (fewer.length === spots.length || fewer.length < 2) break;
           const again = await routeThrough([origin, ...fewer.map((sp) => sp.coord), dest], rules).catch(() => null);
