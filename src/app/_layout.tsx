@@ -4,7 +4,8 @@ import '@/lib/recorder';
 import * as Notifications from 'expo-notifications';
 import { router, Stack } from 'expo-router';
 import { useEffect } from 'react';
-import { getRecorderState, keepRecording, parkedSince, startRecording, stopRecording } from '@/lib/recorder';
+import { getRecorderState, keepRecording, parkedSince, recordedSoFar, startRecording, stopRecording } from '@/lib/recorder';
+import { thin, type LngLat } from '@/lib/geo';
 import { JoyrideNav } from '../../modules/joyride-nav';
 import { formatDuration } from '@/lib/geo';
 import { ACTION_KEEP, ACTION_STOP, CATEGORY } from '@/lib/parked';
@@ -37,19 +38,32 @@ async function onCarPlayRecord(start: boolean) {
     if ((await getRecorderState()) === 'recording') return syncCarPlayRecording();
     const r = await startRecording().catch(() => null);
     if (!r || !r.ok) {
-      JoyrideNav?.setRecording(false, 'Couldn’t start recording. Open Joyride on your phone and allow Location.');
+      JoyrideNav?.setRecording(false, 'Couldn’t start recording. Open Joyride on your phone and allow Location.', null, null);
       return;
     }
-    JoyrideNav?.setRecording(true, null);
+    carPlaySaw = null;
+    await syncCarPlayRecording();
   } else {
     const saved = await stopRecording().catch(() => null);
-    JoyrideNav?.setRecording(false, saved ? `Drive saved · ${formatDuration(saved.endedAt - saved.startedAt)}` : 'Too short to save.');
+    carPlaySaw = false;
+    JoyrideNav?.setRecording(false, saved ? `Drive saved · ${formatDuration(saved.endedAt - saved.startedAt)}` : 'Too short to save.', null, null);
   }
 }
 
-/** Keeps CarPlay's Record / Stop button matching what's really happening (recording can start on the phone too). */
+/**
+ * Keeps CarPlay's Record / Stop button, timer and trail matching what's really
+ * happening (recording can start on the phone too). The path so far is sent
+ * once, when CarPlay first sees the recording; after that it draws as you go.
+ */
+let carPlaySaw: boolean | null = null;
 async function syncCarPlayRecording() {
-  JoyrideNav?.setRecording((await getRecorderState()) === 'recording', null);
+  const on = (await getRecorderState()) === 'recording';
+  if (on === carPlaySaw) return;
+  carPlaySaw = on;
+  if (!on) return JoyrideNav?.setRecording(false, null, null, null);
+  const so = await recordedSoFar();
+  const keep = thin(so.trail as LngLat[], 15).map((i) => so.trail[i]);
+  JoyrideNav?.setRecording(true, null, so.startedAt, keep.slice(-1500));
 }
 
 export default function RootLayout() {

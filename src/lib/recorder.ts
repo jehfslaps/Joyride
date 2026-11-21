@@ -136,6 +136,12 @@ export function subscribe(fn: (pts: TrackPoint[]) => void): () => void {
   return () => listeners.delete(fn);
 }
 
+/** When this recording started, and its path so far (for CarPlay's timer and trail). */
+export async function recordedSoFar(): Promise<{ startedAt: number | null; trail: [number, number][] }> {
+  await ensureLoaded();
+  return { startedAt: points[0]?.[2] ?? null, trail: points.map((p) => [p[0], p[1]] as [number, number]) };
+}
+
 export type RecorderState = 'idle' | 'recording' | 'interrupted';
 
 /** What the recorder is doing right now (also restores state after the app restarts). */

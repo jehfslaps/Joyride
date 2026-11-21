@@ -20,8 +20,10 @@ public final class JoyrideNavModule: Module {
 
     /// Tells CarPlay whether a drive is being recorded (for its Record / Stop
     /// button), with an optional message to show on the car screen.
-    Function("setRecording") { (on: Bool, message: String?) in
-      Task { @MainActor in JoyrideCarPlay.shared.setRecording(on, message: message) }
+    Function("setRecording") { (on: Bool, message: String?, startedAt: Double?, trail: [[Double]]?) in
+      let seed = (trail ?? []).compactMap(Self.coordinate)
+      let start = startedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
+      Task { @MainActor in JoyrideCarPlay.shared.setRecording(on, message: message, startedAt: start, trail: seed) }
     }
 
     /// A Record or Stop tapped on CarPlay while JavaScript wasn't listening yet: "start", "stop" or null.

@@ -53,6 +53,19 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     manager.templateApplicationScene(scene, didConnect: interfaceController, to: window)
     isConnected = true
 
+    // Already recording (started on the phone): show the REC badge, trail and Stop right away.
+    if recording {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+        MainActor.assumeIsolated {
+          let car = JoyrideCarPlay.shared
+          let mapVC = car.manager?.carPlayMapViewController
+          JoyrideRecordingOverlay.shared.attach(host: mapVC, mapView: mapVC?.navigationMapView.mapView)
+          car.keepButtonsShowing(true)
+          if car.manager?.carPlayNavigationViewController == nil { car.followWhileRecording(true) }
+        }
+      }
+    }
+
     // A drive already running on the phone continues on the car screen.
     if JoyrideNavigator.shared.hasActiveSession, let here = Self.currentLocation() {
       manager.beginNavigationWithCarPlay(using: here)
@@ -271,13 +284,26 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
   }
 
   /// From the app: whether a drive is recording now (it may have started on the phone).
-  func setRecording(_ on: Bool, message: String?) {
+  func setRecording(_ on: Bool, message: String?, startedAt: Date? = nil, trail: [CLLocationCoordinate2D] = []) {
     if on != recording {
       recording = on
       recordButton.title = on ? "Stop" : "Record"
       if manager?.carPlayNavigationViewController == nil { followWhileRecording(on) }
+      if on {
+        let mapVC = manager?.carPlayMapViewController
+        JoyrideRecordingOverlay.shared.start(on: mapVC, mapView: mapVC?.navigationMapView.mapView, startedAt: startedAt, trail: trail)
+      } else {
+        JoyrideRecordingOverlay.shared.stop()
+      }
+      keepButtonsShowing(on)
     }
     if let message { alert(message) }
+  }
+
+  /// While recording, the top buttons (with Stop) stay on screen instead of
+  /// fading away after a few seconds, so stopping is always one tap.
+  private func keepButtonsShowing(_ on: Bool) {
+    (manager?.interfaceController?.rootTemplate as? CPMapTemplate)?.automaticallyHidesNavigationBar = !on
   }
 
   /// While recording (and not navigating), the car's map follows you around.
