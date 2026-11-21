@@ -452,3 +452,135 @@ export function streetRuns(g: Graph, path: number[]): { name: string; cls: Stree
   }
   return runs;
 }
+
+// ---- Shorter routes: the quick way, with side-street stretches -------------------------
+
+/** The quick way as a path through the street graph (sticks to the quick way's streets). */
+export function quickPath(g: Graph, a: number, b: number, quick: Set<number>, noHighways: boolean): number[] | null {
+  return cheapestPath(g, a, b, (i) => {
+    const e = g.edges[i];
+    let c = e.len * (quick.has(i) ? 1 : 2.5);
+    if (noHighways && e.highway) c *= 25;
+    return c + 1;
+  });
+}
+
+/** Rough speeds (m/s) per street class, for comparing routes before asking Mapbox. */
+const SPEED: Record<StreetClass, number> = {
+  trunk: 15, primary: 12.5, secondary: 11.5, tertiary: 10.5, unclassified: 9, residential: 8, living_street: 5.5, link: 10,
+};
+
+/** A rough drive time for a path, in seconds: street speeds plus a little for each turn. */
+export function estimateS(g: Graph, path: number[]): number {
+  let s = 0;
+  let last = '';
+  for (const i of path) {
+    const e = g.edges[i];
+    s += e.len / SPEED[e.cls];
+    const name = e.name || `#${e.wayId}`;
+    if (name !== last) s += 7;
+    last = name;
+  }
+  return s;
+}
+
+/** A small random number generator with its own seed, so the same seed plans the same streets. */
+export function seeded(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export interface Spliced {
+  path: number[];
+  /** Where each side-street stretch sits in `path` (edge index range, end exclusive). */
+  stretches: { from: number; to: number }[];
+}
+
+/**
+ * The quick way with `share` of its length (0–1) swapped for side streets,
+ * in a few stretches spread along the trip. `shift` (0–1) moves the stretches
+ * a little, so variants differ.
+ */
+export function splice(
+  g: Graph,
+  qpath: number[],
+  share: number,
+  style: Style,
+  quick: Set<number>,
+  opts: { noHighways: boolean; seed: number; shift?: number; used?: Map<number, number> },
+): Spliced {
+  const cum: number[] = [0];
+  for (const e of qpath) cum.push(cum[cum.length - 1] + g.edges[e].len);
+  const total = cum[cum.length - 1];
+  const funM = total * Math.min(0.95, Math.max(0, share));
+  const n = Math.max(1, Math.min(5, Math.ceil(funM / 3500)));
+  const each = funM / n;
+  const at = (m: number) => {
+    let i = 0;
+    while (i < qpath.length && cum[i + 1] <= m) i++;
+    return Math.min(i, qpath.length);
+  };
+  const shift = ((opts.shift ?? 0.5) - 0.5) * 0.5;
+  const windows: [number, number][] = [];
+  for (let k = 0; k < n; k++) {
+    const mid = ((k + 0.5 + shift) / n) * total;
+    const s = at(Math.max(0, mid - each / 2));
+    const t = at(Math.min(total, mid + each / 2));
+    if (t - s < 2) continue;
+    if (windows.length && s <= windows[windows.length - 1][1]) continue;
+    windows.push([s, t]);
+  }
+  const rand = seeded(opts.seed);
+  const out: number[] = [];
+  const stretches: { from: number; to: number }[] = [];
+  let pos = 0;
+  for (const [s, t] of windows) {
+    out.push(...qpath.slice(pos, s));
+    const u = s === 0 ? g.edges[qpath[0]].from : g.edges[qpath[s - 1]].to;
+    const v = g.edges[qpath[t - 1]].to;
+    const piece = planRoute(g, u, v, style, quick, { noHighways: opts.noHighways, rand, used: opts.used });
+    if (piece && piece.length) {
+      stretches.push({ from: out.length, to: out.length + piece.length });
+      out.push(...piece);
+    } else {
+      out.push(...qpath.slice(s, t));
+    }
+    pos = t;
+  }
+  out.push(...qpath.slice(pos));
+  return { path: out, stretches };
+}
+
+/**
+ * The spliced route whose rough drive time is closest to `extraS` seconds more
+ * than the quick way's (found by trying more or less side street).
+ */
+export function spliceFor(
+  g: Graph,
+  qpath: number[],
+  extraS: number,
+  style: Style,
+  quick: Set<number>,
+  opts: { noHighways: boolean; seed: number; shift?: number; used?: Map<number, number> },
+): Spliced & { extraS: number } {
+  const base = estimateS(g, qpath);
+  let lo = 0.04;
+  let hi = 0.95;
+  let best: (Spliced & { extraS: number }) | null = null;
+  for (let it = 0; it < 6; it++) {
+    const share = (lo + hi) / 2;
+    const r = splice(g, qpath, share, style, quick, opts);
+    const extra = estimateS(g, r.path) - base;
+    if (!best || Math.abs(extra - extraS) < Math.abs(best.extraS - extraS)) best = { ...r, extraS: extra };
+    if (Math.abs(extra - extraS) < extraS * 0.08) break;
+    if (extra < extraS) lo = share;
+    else hi = share;
+  }
+  return best!;
+}

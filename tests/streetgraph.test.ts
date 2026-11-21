@@ -10,6 +10,9 @@ import {
   pathCoords,
   planRoute,
   quickEdges,
+  quickPath,
+  estimateS,
+  spliceFor,
   streetRuns,
   STYLES,
   withDips,
@@ -121,5 +124,24 @@ assert.ok(full.some((e) => g.edges[e].name === 'Elm Court'), 'drives Elm Court')
 // The band covers both ends and the parallel street.
 const band = bandAround(quickLine, 1800);
 assert.ok(band.length >= 6);
+
+// Shorter routes: the quick way with side-street stretches, sized to a time budget.
+const qp = quickPath(g, a, b, quick, false)!;
+assert.ok(qp && qp.every((e) => quick.has(e)), 'quick path follows the quick way');
+const qS = estimateS(g, qp);
+let lastExtra = 0;
+for (const want of [60, 150, 300]) {
+  const r = spliceFor(g, qp, want, STYLES[1], quick, { noHighways: false, seed: 42 });
+  for (let i = 1; i < r.path.length; i++) assert.equal(g.edges[r.path[i - 1]].to, g.edges[r.path[i]].from, 'spliced route connects');
+  assert.equal(g.edges[r.path[0]].from, a);
+  assert.equal(g.edges[r.path[r.path.length - 1]].to, b);
+  assert.ok(r.stretches.length >= 1, 'has side-street stretches');
+  const got = estimateS(g, r.path) - qS;
+  assert.ok(Math.abs(got - want) < Math.max(60, want * 0.35), `extra time near ${want} s (got ${Math.round(got)} s)`);
+  assert.ok(got > lastExtra, 'bigger budget, more side streets');
+  lastExtra = got;
+  const onMain = r.path.filter((e) => quick.has(e)).length / r.path.length;
+  if (want === 60) assert.ok(onMain > 0.5, `a little detour stays mostly on the main road (${Math.round(onMain * 100)}%)`);
+}
 
 console.log('streetgraph: all checks passed');

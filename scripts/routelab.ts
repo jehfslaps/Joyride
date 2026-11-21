@@ -17,8 +17,9 @@ const NONE = { noFreeways: true, noHighways: true };
 const TRIPS: { name: string; to: LngLat; rules: RoadRules; cs: boolean }[] = [
   { name: 'costco-la-habra', to: [0, 0], address: '101 N Beach Blvd, La Habra, CA 90631', rules: ANY, cs: false } as any,
   { name: 'walnut', to: [-117.8653, 34.0203], rules: { noFreeways: true, noHighways: false }, cs: false },
-  { name: 'downtown-fullerton', to: [-117.9243, 33.8704], rules: ANY, cs: false },
-  { name: 'la-habra', to: [-117.9462, 33.9319], rules: ANY, cs: false },
+  // Long Surprise-style trips with both Avoid switches on.
+  { name: 'glendale', to: [-118.2553, 34.1457], rules: NONE, cs: false },
+  { name: 'long-beach', to: [-118.1937, 33.7683], rules: NONE, cs: false },
 ];
 
 let seed = 7;

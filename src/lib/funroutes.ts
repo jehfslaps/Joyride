@@ -20,12 +20,16 @@ import { areaName, nearby, type NearbyFeature, type Place } from './places';
 import {
   bandAround,
   buildGraph,
+  estimateS,
+  type Dip,
   fetchStreets,
   findDips,
   nearestNode,
   pathCoords,
   planRoute,
   quickEdges,
+  quickPath,
+  spliceFor,
   streetRuns,
   STYLES,
   withDips,
@@ -503,8 +507,24 @@ export async function timeAlong(coords: LngLat[]): Promise<{ durationS: number; 
       return { d: ms.reduce((a, m) => a + (m.duration ?? 0), 0), m: ms.reduce((a, m) => a + (m.distance ?? 0), 0) };
     }),
   );
-  if (results.some((r) => !r)) return null;
-  return { durationS: results.reduce((a, r) => a + r!.d, 0), distanceM: results.reduce((a, r) => a + r!.m, 0) };
+  // A piece Mapbox couldn't match (a gap, a private road) is timed at the
+  // average speed of the rest, unless too many failed to trust it.
+  const ok = results.filter((r): r is { d: number; m: number } => !!r && r.m > 0);
+  if (ok.length < results.length * 0.7 || !ok.length) return null;
+  const speed = ok.reduce((a, r) => a + r.m, 0) / Math.max(1, ok.reduce((a, r) => a + r.d, 0));
+  let d = 0;
+  let m = 0;
+  results.forEach((r, i) => {
+    if (r && r.m > 0) {
+      d += r.d;
+      m += r.m;
+    } else {
+      const len = cumulative(pieces[i]).pop() ?? 0;
+      d += len / speed;
+      m += len;
+    }
+  });
+  return { durationS: d, distanceM: m };
 }
 
 async function directions(points: LngLat[], noFreeways: boolean, blocked: LngLat[], continueStraight: boolean): Promise<DirectionsResult | null> {
@@ -716,10 +736,20 @@ async function neighborhoodsOn(spots: Via[], skip: Set<string>): Promise<string[
 
 // ---- Street-by-street routes ---------------------------------------------------------
 
+/** Shorter options: mostly the quick way, with side-street stretches adding about this much time. */
+export const SHORT_TIERS = [
+  { title: 'A little detour', share: 0.1, minS: 5 * 60, style: 1, culDeSacs: 1 },
+  { title: 'Some side streets', share: 0.2, minS: 9 * 60, style: 1, culDeSacs: 1 },
+  { title: 'Half and half', share: 0.4, minS: 15 * 60, style: 2, culDeSacs: 2 },
+];
+
 /**
  * Fun routes planned street by street (see streetgraph.ts): real chains of
- * connecting streets that keep heading toward the destination, two per style
- * from "a few side streets" to "every nook", each a different combination.
+ * connecting streets that keep heading toward the destination. Two kinds:
+ *  - shorter ones: the quick way with a few side-street stretches, adding
+ *    roughly 10%, 20% and 40% to the trip;
+ *  - full ones: side streets the whole way, two per style from "a few side
+ *    streets" to "every nook", each a different combination.
  */
 async function streetRoutes(
   origin: LngLat,
@@ -737,57 +767,97 @@ async function streetRoutes(
   if (a == null || b == null) return 0;
   const quick = quickEdges(g, base.coords);
   const quickNames = new Set([...quick].map((e) => g.edges[e].name).filter(Boolean));
+  const noHighways = opts.rules.noHighways;
   const used = new Map<number, number>();
   let made = 0;
   const jobs: (() => Promise<void>)[] = [];
+
+  const emit = (id: string, level: number, title: string, path: number[], dips: Dip[]) => {
+    const full = withDips(path, dips);
+    const coords: LngLat[] = [origin, ...pathCoords(g, full), dest];
+    const runs = streetRuns(g, path);
+    // The streets worth naming: the bigger ones it switches onto, in order.
+    const via: string[] = [];
+    for (const r of runs) {
+      if (!r.name || r.len < 350 || via.includes(r.name) || quickNames.has(r.name)) continue;
+      if (r.cls === 'residential' || r.cls === 'living_street' || r.cls === 'link') continue;
+      via.push(r.name);
+    }
+    const guessS = estimateS(g, full) * speedFix;
+    jobs.push(async () => {
+      // Mapbox's time along the exact streets; a rough estimate if that fails.
+      const t = (await timeAlong(coords).catch(() => null)) ?? { durationS: guessS, distanceM: cumulative(coords).pop() ?? 0 };
+      made++;
+      const smallStreets = runs.filter((r) => r.cls === 'residential' || r.cls === 'living_street' || r.cls === 'unclassified').length;
+      const parts: string[] = [];
+      if (via.length) parts.push(`Via ${joinNames(via.slice(0, 3))}`);
+      if (smallStreets) parts.push(`${smallStreets} little street${smallStreets === 1 ? '' : 's'}`);
+      if (dips.length) parts.push(`${dips.length} cul-de-sac${dips.length === 1 ? '' : 's'}`);
+      add({
+        id: `${id}-${Math.round(t.durationS)}`,
+        style: 'weave',
+        level,
+        title,
+        blurb: parts.join(' · ') || 'Winds through residential side streets',
+        durationS: t.durationS,
+        distanceM: t.distanceM,
+        coords,
+        via: dips.map((d) => ({ coord: d.tip, kind: 'culdesac' as const, name: '' })),
+        through: via,
+        passes: [],
+        culDeSacs: dips.length,
+        newShare: opts.visited?.newShare(coords) ?? null,
+        usesHighway: noHighways && path.some((e) => g.edges[e].highway),
+        highwayM: path.filter((e) => g.edges[e].highway).reduce((x, e) => x + g.edges[e].len, 0),
+        streets: runs.filter((r) => r.len >= 60).map((r) => r.name || '(unnamed)'),
+      });
+    });
+  };
+
+  // The quick way through the street graph, and how our rough times compare to Mapbox's.
+  const qpath = quickPath(g, a, b, quick, noHighways);
+  const qEst = qpath && qpath.length ? estimateS(g, qpath) : 0;
+  const speedFix = qEst > 0 ? Math.min(2, Math.max(0.5, base.durationS / qEst)) : 1;
+
+  // Full routes: side streets the whole way.
+  let fullExtra = Infinity;
   STYLES.forEach((style, si) => {
     for (let v = 0; v < opts.variants; v++) {
-      const path = planRoute(g, a, b, style, quick, { noHighways: opts.rules.noHighways, rand: opts.rand, used });
+      const path = planRoute(g, a, b, style, quick, { noHighways, rand: opts.rand, used });
       if (!path || !path.length) continue;
       for (const e of path) used.set(e, (used.get(e) ?? 0) + 1);
       const dips = findDips(g, path, style.culDeSacs, opts.rand);
-      const full = withDips(path, dips);
-      const coords: LngLat[] = [origin, ...pathCoords(g, full), dest];
-      const runs = streetRuns(g, path);
-      // The streets worth naming: the bigger ones it switches onto, in order.
-      const via: string[] = [];
-      for (const r of runs) {
-        if (!r.name || r.len < 350 || via.includes(r.name) || quickNames.has(r.name)) continue;
-        if (r.cls === 'residential' || r.cls === 'living_street' || r.cls === 'link') continue;
-        via.push(r.name);
-      }
-      const turns = runs.length;
-      jobs.push(async () => {
-        const t = await timeAlong(coords).catch(() => null);
-        if (!t) return;
-        made++;
-        const smallStreets = runs.filter((r) => r.cls === 'residential' || r.cls === 'living_street' || r.cls === 'unclassified').length;
-        const parts: string[] = [];
-        if (via.length) parts.push(`Via ${joinNames(via.slice(0, 3))}`);
-        if (smallStreets) parts.push(`${smallStreets} little street${smallStreets === 1 ? '' : 's'}`);
-        if (dips.length) parts.push(`${dips.length} cul-de-sac${dips.length === 1 ? '' : 's'}`);
-        add({
-          id: `street-${si + 1}-${v}-${Math.round(t.durationS)}`,
-          style: 'weave',
-          level: si + 1,
-          title: style.title,
-          blurb: parts.join(' · ') || 'Winds through residential side streets',
-          durationS: t.durationS,
-          distanceM: t.distanceM,
-          coords,
-          via: dips.map((d) => ({ coord: d.tip, kind: 'culdesac' as const, name: '' })),
-          through: via,
-          passes: [],
-          culDeSacs: dips.length,
-          newShare: opts.visited?.newShare(coords) ?? null,
-          usesHighway: opts.rules.noHighways && path.some((e) => g.edges[e].highway),
-          highwayM: path.filter((e) => g.edges[e].highway).reduce((x, e) => x + g.edges[e].len, 0),
-          streets: runs.filter((r) => r.len >= 60).map((r) => r.name || '(unnamed)'),
-        });
-        void turns;
-      });
+      if (qEst) fullExtra = Math.min(fullExtra, estimateS(g, withDips(path, dips)) - qEst);
+      emit(`street-${si + 1}-${v}`, si + 2, style.title, path, dips);
     }
   });
+
+  // Shorter routes: the quick way with side-street stretches, if they'd really be shorter.
+  if (qpath && qpath.length > 4) {
+    SHORT_TIERS.forEach((tier, ti) => {
+      const extraS = Math.max(tier.minS, base.durationS * tier.share) / speedFix;
+      if (extraS > fullExtra * 0.8) return;
+      const variants = ti < 2 ? opts.variants : 1;
+      for (let v = 0; v < variants; v++) {
+        const r = spliceFor(g, qpath, extraS, STYLES[tier.style], quick, {
+          noHighways,
+          seed: Math.floor(opts.rand() * 1e9),
+          shift: variants > 1 ? v / (variants - 1) : 0.5,
+          used,
+        });
+        if (!r.stretches.length || r.extraS < 60) continue;
+        for (const { from, to } of r.stretches) for (let i = from; i < to; i++) used.set(r.path[i], (used.get(r.path[i]) ?? 0) + 1);
+        // Cul-de-sacs only on the side-street stretches, one per stretch.
+        const dips: Dip[] = [];
+        for (const st of r.stretches.slice(0, tier.culDeSacs)) {
+          const piece = r.path.slice(st.from, st.to);
+          for (const d of findDips(g, piece, 1, opts.rand)) dips.push({ ...d, after: d.after + st.from });
+        }
+        emit(`short-${ti + 1}-${v}`, 1, tier.title, r.path, dips);
+      }
+    });
+  }
+
   for (let i = 0; i < jobs.length; i += 3) await Promise.all(jobs.slice(i, i + 3).map((j) => j().catch(() => {})));
   return made;
 }
