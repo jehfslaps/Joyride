@@ -141,10 +141,23 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
   }
 
   @MainActor
+  /// The drive was ended on the car screen: stop guidance everywhere, close
+  /// the phone's navigation screen too, and leave just you on the map.
   func endFromCarPlay(canceled: Bool) {
     session?.stop()
     session = nil
+    sharedProvider().mapboxNavigation.tripSession().setToIdle()
+    if let phone = phoneController {
+      phoneController = nil
+      phone.dismiss(animated: true)
+      onEnded?(canceled, arrived)
+      onEnded = nil
+    }
+    JoyrideCarPlay.shared.clearMap()
   }
+
+  /// The phone's navigation screen, while it's showing.
+  weak var phoneController: NavigationViewController?
 
   @MainActor
   func startReplay(
@@ -200,6 +213,7 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     session = replay
     self.onEnded = onEnded
     arrived = false
+    phoneController = controller
     presenter.present(controller, animated: true) {
       MainActor.assumeIsolated {
         replay.attach()
@@ -228,7 +242,10 @@ final class JoyrideNavigator: NSObject, NavigationViewControllerDelegate {
     MainActor.assumeIsolated {
       session?.stop()
       session = nil
+      phoneController = nil
       navigationViewController.dismiss(animated: true)
+      // Ended on the phone: end it on the car screen too, and clear the route there.
+      JoyrideCarPlay.shared.endOnCar()
     }
     onEnded?(canceled, arrived)
     onEnded = nil

@@ -2,6 +2,7 @@ import CarPlay
 import CoreLocation
 import Foundation
 import MapboxDirections
+import MapboxMaps
 import MapboxNavigationCore
 import MapboxNavigationUIKit
 
@@ -94,6 +95,18 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
     return [drives, surprise]
   }
 
+  /// While driving: zoom in, zoom out, and back to following you, down the right
+  /// side of the map. Browsing keeps Mapbox's own set (which has zoom too).
+  nonisolated func carPlayManager(
+    _ carPlayManager: CarPlayManager,
+    mapButtonsCompatibleWith traitCollection: UITraitCollection,
+    in carPlayTemplate: CPTemplate,
+    for activity: CarPlayActivity
+  ) -> [CPMapButton]? {
+    guard activity == .navigating else { return nil }
+    return MainActor.assumeIsolated { JoyrideCarPlay.shared.drivingButtons() }
+  }
+
   nonisolated func carPlayManager(_ carPlayManager: CarPlayManager, didSetup navigationMapView: NavigationMapView) {}
 
   nonisolated func carPlayManager(
@@ -146,6 +159,57 @@ final class JoyrideCarPlay: NSObject, CarPlayManagerDelegate {
 
   nonisolated func carPlayManagerDidEndNavigation(_ carPlayManager: CarPlayManager, byCanceling canceled: Bool) {
     MainActor.assumeIsolated { JoyrideNavigator.shared.endFromCarPlay(canceled: canceled) }
+  }
+
+  // MARK: Driving buttons and cleanup
+
+  private static func symbol(_ name: String) -> UIImage? {
+    UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold))
+  }
+
+  func drivingButtons() -> [CPMapButton] {
+    let recenter = CPMapButton { _ in MainActor.assumeIsolated { JoyrideCarPlay.shared.follow() } }
+    recenter.image = Self.symbol("location.fill")
+    let zoomIn = CPMapButton { _ in MainActor.assumeIsolated { JoyrideCarPlay.shared.zoom(by: 1) } }
+    zoomIn.image = Self.symbol("plus")
+    let zoomOut = CPMapButton { _ in MainActor.assumeIsolated { JoyrideCarPlay.shared.zoom(by: -1) } }
+    zoomOut.image = Self.symbol("minus")
+    return [recenter, zoomIn, zoomOut]
+  }
+
+  /// Zooming pauses following you (like Apple Maps); the location button picks it back up.
+  func zoom(by step: Double) {
+    guard let view = manager?.navigationMapView else { return }
+    view.navigationCamera.stop()
+    let map = view.mapView.mapboxMap
+    var camera = CameraOptions(cameraState: map.cameraState)
+    camera.zoom = min(19.5, max(4, map.cameraState.zoom + step))
+    view.mapView.camera.ease(to: camera, duration: 0.3)
+  }
+
+  func follow() {
+    manager?.navigationMapView?.navigationCamera.update(cameraState: .following)
+  }
+
+  /// After a drive ends: no route left on the car's map, just you where you are.
+  func clearMap() {
+    guard let manager else { return }
+    let tidy = {
+      guard let view = manager.carPlayMapViewController?.navigationMapView else { return }
+      view.removeRoutes()
+      if let here = Self.currentLocation() {
+        view.mapView.camera.ease(to: CameraOptions(center: here, zoom: 14.5, bearing: 0, pitch: 0), duration: 0.6)
+      }
+    }
+    tidy()
+    // Mapbox swaps the map template back in after ending; tidy again once it has.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { MainActor.assumeIsolated { tidy() } }
+  }
+
+  /// The drive was ended on the phone: end it on the car screen too.
+  func endOnCar() {
+    manager?.carPlayNavigationViewController?.exitNavigation(byCanceling: true)
+    clearMap()
   }
 
   // MARK: My drives
