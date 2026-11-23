@@ -1,8 +1,12 @@
 // Draw a drive (phone only): make your own route on the map, save it, then
 // relive it with turn-by-turn like any other drive.
 //
-//  - Draw: drag a finger along the streets; when you lift it, the line snaps
-//    onto the streets you traced. Pinch to zoom; switch to Tap to move the map.
+//  - Draw: turn the pencil on and drag a finger along the streets; when you
+//    lift it, the line snaps onto the streets you traced. With the pencil on,
+//    the map holds still (use + / − to zoom); off, the map moves normally.
+//    A second finger during a stroke cancels it, so pinches never draw.
+//  - The drive starts wherever you first draw or tap (any city), or at your
+//    location with "Start from my location".
 //  - Tap: tap a street and it connects from the last point along real streets.
 //  - Undo / Redo step back and forth through strokes and taps.
 //  - Back to start closes the loop. Parts Joyride had to change to follow
@@ -11,9 +15,9 @@
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
-import MapView, { Polyline } from 'react-native-maps';
+import MapView, { Polyline, type Region } from 'react-native-maps';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GlassCard, GlowRoute, PinTile, PrimaryPill, RoundButton, Segmented, TwoTone, useMapLook, Vignette } from '@/components/ui';
@@ -40,7 +44,12 @@ export default function DrawScreen() {
   const map = useRef<MapView>(null);
 
   const [mode, setMode] = useState<Mode>('draw');
-  const [start, setStart] = useState<LngLat | null>(null);
+  // The pencil: on, one finger draws and the map holds still; off, the map moves.
+  const [pen, setPen] = useState(false);
+  const drawing = mode === 'draw' && pen;
+  // Where the drive starts: set by a tap, a long-press or "Start from my location";
+  // otherwise it's wherever the first stroke begins.
+  const [pinnedStart, setStart] = useState<LngLat | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
   const [redo, setRedo] = useState<Step[]>([]);
   const [busy, setBusy] = useState(0);
@@ -48,12 +57,8 @@ export default function DrawScreen() {
   const strokeRef = useRef<LngLat[]>([]);
   const [saving, setSaving] = useState(false);
 
-  // Start where you are (long-press the map before drawing to start elsewhere).
-  useEffect(() => {
-    if (!start && here) setStart(here);
-  }, [here, start]);
-
   const pieces = useMemo(() => steps.flat(), [steps]);
+  const start: LngLat | null = pinnedStart ?? pieces[0]?.coords[0] ?? null;
   const end = pieces.length ? pieces[pieces.length - 1].coords[pieces[pieces.length - 1].coords.length - 1] : start;
   const sum = totals(pieces);
   const adjusted = pieces.filter((x) => x.adjusted).length;
@@ -83,17 +88,30 @@ export default function DrawScreen() {
   };
 
   // ---- Draw: one finger traces, lifting it snaps the stroke onto the streets.
+  const tainted = useRef(false);
+  const onTouches = (count: number) => {
+    // A second finger: it's a pinch, not a stroke. Drop what's been drawn.
+    if (count > 1) {
+      tainted.current = true;
+      strokeRef.current = [];
+      setStroke([]);
+    }
+  };
   const onDrag = (c: LngLat) => {
+    if (tainted.current) return;
     const list = strokeRef.current;
     const last = list[list.length - 1];
     if (last && distance(last, c) < 6) return;
     list.push(c);
     setStroke([...list]);
   };
-  const finishStroke = () => {
+  const finishStroke = (stillTouching = 0) => {
+    if (stillTouching > 0) return;
+    const wasTainted = tainted.current;
+    tainted.current = false;
     const raw = strokeRef.current;
     strokeRef.current = [];
-    if (raw.length < 2) {
+    if (wasTainted || raw.length < 2) {
       setStroke([]);
       return;
     }
@@ -117,6 +135,17 @@ export default function DrawScreen() {
       const piece = from ? await connect(from, c) : null;
       return piece ? [piece] : [];
     });
+  };
+
+  // + / − while the pencil holds the map still.
+  const region = useRef<Region | null>(null);
+  const zoom = (factor: number) => {
+    const r = region.current;
+    if (!r) return;
+    map.current?.animateToRegion(
+      { ...r, latitudeDelta: Math.min(60, Math.max(0.002, r.latitudeDelta * factor)), longitudeDelta: Math.min(60, Math.max(0.002, r.longitudeDelta * factor)) },
+      250,
+    );
   };
 
   const undo = () => {
@@ -146,6 +175,7 @@ export default function DrawScreen() {
         onPress: () => {
           setSteps([]);
           setRedo([]);
+          setStart(null);
         },
       },
     ]);
@@ -191,8 +221,10 @@ export default function DrawScreen() {
     <View style={s.root}>
       <View
         style={StyleSheet.absoluteFill}
-        onTouchEnd={() => mode === 'draw' && finishStroke()}
-        onTouchCancel={() => mode === 'draw' && finishStroke()}
+        onTouchStart={(e) => drawing && onTouches(e.nativeEvent.touches.length)}
+        onTouchMove={(e) => drawing && onTouches(e.nativeEvent.touches.length)}
+        onTouchEnd={(e) => drawing && finishStroke(e.nativeEvent.touches.length)}
+        onTouchCancel={() => drawing && finishStroke()}
       >
         {here && (
           <MapView
@@ -202,9 +234,13 @@ export default function DrawScreen() {
             showsUserLocation
             rotateEnabled={false}
             pitchEnabled={false}
-            // Draw mode: one finger draws (so the map can't be dragged); pinch still zooms.
-            scrollEnabled={mode === 'tap'}
-            onPanDrag={(e) => mode === 'draw' && onDrag([e.nativeEvent.coordinate.longitude, e.nativeEvent.coordinate.latitude])}
+            // Pencil on: the map holds still and one finger draws. Off: the map moves as usual.
+            scrollEnabled={!drawing}
+            zoomEnabled={!drawing}
+            onRegionChangeComplete={(r) => {
+              region.current = r;
+            }}
+            onPanDrag={(e) => drawing && onDrag([e.nativeEvent.coordinate.longitude, e.nativeEvent.coordinate.latitude])}
             onPress={(e) => onTapMap([e.nativeEvent.coordinate.longitude, e.nativeEvent.coordinate.latitude])}
             onLongPress={(e) => onLongPress([e.nativeEvent.coordinate.longitude, e.nativeEvent.coordinate.latitude])}
             {...mapLook}
@@ -235,6 +271,19 @@ export default function DrawScreen() {
         <RoundButton icon="redo-variant" label="Redo" onPress={redoStep} disabled={!redo.length || busy > 0} />
       </View>
 
+      {/* Pencil (and zoom while it's on), right side of the map */}
+      {mode === 'draw' && (
+        <Animated.View entering={enterFade} exiting={exitFade} style={[s.tools, { top: insets.top + 70 }]} pointerEvents="box-none">
+          <RoundButton icon={pen ? 'pencil' : 'pencil-off-outline'} label={pen ? 'Pencil on. Tap to move the map.' : 'Pencil off. Tap to draw.'} onPress={() => setPen((v) => !v)} />
+          {pen && (
+            <Animated.View entering={enterFade} exiting={exitFade} style={{ gap: 8 }}>
+              <RoundButton icon="plus" label="Zoom in" onPress={() => zoom(0.5)} />
+              <RoundButton icon="minus" label="Zoom out" onPress={() => zoom(2)} />
+            </Animated.View>
+          )}
+        </Animated.View>
+      )}
+
       {/* Bottom sheet */}
       <Animated.View entering={enterRise} style={[s.sheetWrap, { paddingBottom: insets.bottom + 12 }]} pointerEvents="box-none">
         <GlassCard radiusSize={28} glow style={s.sheet}>
@@ -247,13 +296,19 @@ export default function DrawScreen() {
             onChange={setMode}
           />
           <Animated.Text key={mode} entering={enterFade} exiting={exitFade} style={t.caption}>
-            {mode === 'draw'
-              ? 'Drag along the streets. Lift your finger and it snaps onto them. Pinch to zoom; switch to Tap to move the map.'
-              : 'Tap a street to drive there along real streets. Drag to move the map.'}
+            {mode === 'tap'
+              ? `Tap a street to ${start ? 'drive there along real streets' : 'start there'}. Drag and pinch move the map.`
+              : pen
+                ? 'Pencil on: drag along the streets, lift and it snaps onto them. Use + / − to zoom.'
+                : `Move the map to ${start ? 'where you want to go next' : 'where you want to start (any city)'}, then turn on the pencil.`}
           </Animated.Text>
 
           <View style={s.stats}>
-            <TwoTone lead={formatMiles(sum.distanceM)} value={sum.durationS ? `about ${Math.max(1, Math.round(sum.durationS / 60))} min` : 'not started'} size="body" />
+            {pieces.length ? (
+              <TwoTone lead={formatMiles(sum.distanceM)} value={`about ${Math.max(1, Math.round(sum.durationS / 60))} min`} size="body" />
+            ) : (
+              <TwoTone lead="Nothing drawn" value="yet" size="body" />
+            )}
             {busy > 0 && <ActivityIndicator color={p.brand} />}
           </View>
           {adjusted > 0 && (
@@ -263,7 +318,23 @@ export default function DrawScreen() {
           )}
 
           <View style={s.row}>
-            <PrimaryPill label="Back to start" icon="home-import-outline" tone="glass" compact onPress={backToStart} disabled={!canLoop || busy > 0} style={{ flex: 1 }} />
+            {start ? (
+              <PrimaryPill label="Back to start" icon="home-import-outline" tone="glass" compact onPress={backToStart} disabled={!canLoop || busy > 0} style={{ flex: 1 }} />
+            ) : (
+              <PrimaryPill
+                label="Start from my location"
+                icon="crosshairs-gps"
+                tone="glass"
+                compact
+                disabled={!here}
+                onPress={() => {
+                  if (!here) return;
+                  setStart(here);
+                  map.current?.animateToRegion({ latitude: here[1], longitude: here[0], latitudeDelta: 0.02, longitudeDelta: 0.02 }, 400);
+                }}
+                style={{ flex: 1 }}
+              />
+            )}
             <PrimaryPill label="Clear" icon="eraser" tone="glass" compact onPress={clear} disabled={!steps.length} style={{ flex: 1 }} />
           </View>
           <PrimaryPill label="Save this drive" icon="content-save-outline" onPress={save} disabled={!pieces.length || busy > 0} busy={saving} />
@@ -281,4 +352,5 @@ const useStyles = makeStyles((p) => ({
   sheet: { padding: 16, gap: 12 },
   stats: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   row: { flexDirection: 'row', gap: 10 },
+  tools: { position: 'absolute', right: 12, gap: 8, alignItems: 'center' },
 }));

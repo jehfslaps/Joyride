@@ -58,7 +58,8 @@ async function match(points: LngLat[]): Promise<{ coords: LngLat[]; durationS: n
  * (the end of the drive so far), so the drive stays one connected path.
  */
 export async function snapStroke(raw: LngLat[], from: LngLat | null): Promise<Piece[]> {
-  if (raw.length < 2 || lineLength(raw) < 25) return [];
+  // Shorter than about half a block: an accidental touch, not a stroke.
+  if (raw.length < 4 || lineLength(raw) < 60) return [];
   const pieces: Piece[] = [];
 
   // A stroke that starts away from the end of the drive gets joined to it first.
