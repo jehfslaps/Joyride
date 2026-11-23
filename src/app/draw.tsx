@@ -322,7 +322,7 @@ export default function DrawScreen() {
               <PrimaryPill label="Back to start" icon="home-import-outline" tone="glass" compact onPress={backToStart} disabled={!canLoop || busy > 0} style={{ flex: 1 }} />
             ) : (
               <PrimaryPill
-                label="Start from my location"
+                label="Start at me"
                 icon="crosshairs-gps"
                 tone="glass"
                 compact
