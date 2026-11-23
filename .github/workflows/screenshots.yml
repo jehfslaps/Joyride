@@ -114,6 +114,7 @@ jobs:
             screen "$LOOK-3-fun-routes" "/routes?lng=-117.9243&lat=33.8704&name=Downtown%20Fullerton&pick=weave" 50
             screen "$LOOK-4-surprise-me" "/surprise" 10
             screen "$LOOK-4b-surprise-over-there" "/surprise?mode=there" 14
+            screen "$LOOK-4c-draw-a-drive" "/draw" 10
             screen "$LOOK-5-settings" "/settings" 8
             screen "$LOOK-6-welcome" "/welcome" 8
           done
