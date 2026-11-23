@@ -210,7 +210,8 @@ export default function Home() {
     mapH.value = withSpring(screenH * (recording ? 0.58 : 0.4), springUI);
   }, [recording, screenH, mapH]);
   const mapHeight = useAnimatedStyle(() => ({ height: mapH.value }));
-  const totalM = drives.reduce((a, d) => a + d.distanceM, 0);
+  // Miles you've really driven (drawn drives aren't counted until you drive them).
+  const totalM = drives.filter((d) => !d.drafted).reduce((a, d) => a + d.distanceM, 0);
   const startedAt = points[0] ? new Date(points[0][2]).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
 
   return (
@@ -292,6 +293,7 @@ export default function Home() {
                 <PrimaryPill label="Fun routes" icon="routes" tone="glass" onPress={() => router.push('/routes')} style={{ flex: 1 }} compact />
                 <PrimaryPill label="Surprise me" icon="dice-5-outline" tone="glass" onPress={() => router.push('/surprise')} style={{ flex: 1 }} compact />
               </View>
+              <PrimaryPill label="Draw a drive" icon="draw" tone="glass" onPress={() => router.push('/draw')} compact />
               {drives.length > 0 && <Label style={{ marginTop: 10 }}>YOUR DRIVES</Label>}
             </View>
           }

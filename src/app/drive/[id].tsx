@@ -43,6 +43,7 @@ export default function DriveScreen() {
   const here = useHere();
   const map = useRef<MapView>(null);
   const [drive, setDrive] = useState<DriveSummary | null>(null);
+  const drafted = !!drive?.drafted;
   const [points, setPoints] = useState<TrackPoint[]>([]);
   const [preparing, setPreparing] = useState<number | null>(null);
   const [choice, setChoice] = useState<Choice | null>(null);
@@ -142,8 +143,8 @@ export default function DriveScreen() {
         ]);
       });
       setPreparing(0);
-      // The trip back is a new drive of its own.
-      if (back && recordBack && (await getRecorderState()) !== 'recording') await startRecording().catch(() => null);
+      // The trip back (or driving a drawn drive) is a new drive of its own.
+      if ((back || drafted) && recordBack && (await getRecorderState()) !== 'recording') await startRecording().catch(() => null);
       await JoyrideNav.startReplay(trace, here, joinNearest, false, false);
     } catch (e: any) {
       Alert.alert('Couldn’t start navigation', e?.message ?? String(e));
@@ -279,7 +280,9 @@ export default function DriveScreen() {
                 disabled={preparing != null}
               />
               <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4 }}>
-                <Text style={[t.caption, { flex: 1 }]}>Same streets, end to start. Record the trip back as a new drive</Text>
+                <Text style={[t.caption, { flex: 1 }]}>
+                  {drafted ? 'Record it as you drive, as a new drive (either direction)' : 'Same streets, end to start. Record the trip back as a new drive'}
+                </Text>
                 <Switch value={recordBack} onValueChange={setRecordBack} trackColor={{ true: p.brand }} accessibilityLabel="Record the trip back" />
               </View>
             </View>

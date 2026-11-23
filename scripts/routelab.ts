@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cumulative, distance, project, thin, type LngLat } from '../src/lib/geo';
 import { buildFunRoutes, routeThrough, setContinueStraight, type RoadRules, type RouteOption } from '../src/lib/funroutes';
+import { connect, snapStroke } from '../src/lib/draft';
 
 const TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? '';
 const OUT = process.argv[2] ?? 'out';
@@ -150,8 +151,34 @@ async function draw(file: string, r: RouteOption, base: LngLat[] | null) {
 const min = (s: number) => `${Math.round(s / 60)} min`;
 const mi = (m: number) => `${(m / 1609.344).toFixed(1)} mi`;
 
+/** Draw a drive: a wobbly, finger-like line along real streets should snap back onto them. */
+async function drawCheck() {
+  log('\n=== draw a drive');
+  const trips: [string, LngLat, LngLat][] = [
+    ['Uptown Whittier → La Habra (main streets)', uptownWhittier, [-117.9462, 33.9319]],
+    ['Whittier neighborhood (residential)', [-118.0357, 33.9601], [-118.0186, 33.9512]],
+  ];
+  for (const [name, a, b] of trips) {
+    const real = await routeThrough([a, b], { noFreeways: true, noHighways: false }, false);
+    if (!real) {
+      log(`  ${name}: no base route`);
+      continue;
+    }
+    // A finger: points every ~15 m, each off by up to ±12 m.
+    const finger = thin(real.coords, 15).map((i) => real.coords[i]).map(([x, y]) => [x + (rand() - 0.5) * 0.00026, y + (rand() - 0.5) * 0.00022] as LngLat);
+    const t0 = Date.now();
+    const pieces = await snapStroke(finger, a);
+    const snapped = pieces.flatMap((p) => p.coords);
+    const cov = coverage(real.coords, snapped, 25);
+    log(`  ${name}: ${pieces.length} piece(s) in ${((Date.now() - t0) / 1000).toFixed(1)} s · follows the real streets ${(cov * 100).toFixed(0)}% · adjusted ${pieces.some((p) => p.adjusted)}`);
+    const tap = await connect(a, b);
+    log(`  tap ${name}: ${tap ? `${tap.coords.length} points, ${Math.round(tap.durationS / 60)} min` : 'failed'}`);
+  }
+}
+
 async function main() {
   if (!TOKEN) throw new Error('No Mapbox token');
+  await drawCheck();
   for (const trip of TRIPS as any[]) {
     if (trip.address) {
       const q = new URLSearchParams({ q: trip.address, limit: '1', country: 'us', access_token: TOKEN });

@@ -15,6 +15,8 @@ export interface DriveSummary {
   /** Start and end, handy for showing on the list without loading every point. */
   start: LngLat;
   end: LngLat;
+  /** Drawn on the map (Draw a drive) rather than recorded; times are estimates. */
+  drafted?: boolean;
 }
 
 const INDEX_KEY = 'joyride:drives';
@@ -50,12 +52,13 @@ export async function getDrivePoints(id: string): Promise<TrackPoint[]> {
   return raw ? (JSON.parse(raw) as TrackPoint[]) : [];
 }
 
-export async function saveDrive(points: TrackPoint[]): Promise<DriveSummary | null> {
+export async function saveDrive(points: TrackPoint[], opts: { name?: string | null; drafted?: boolean } = {}): Promise<DriveSummary | null> {
   if (points.length < 2) return null;
   const coords = points.map((p) => [p[0], p[1]] as LngLat);
   const summary: DriveSummary = {
-    id: `${points[0][2]}`,
-    name: null,
+    id: `${opts.drafted ? 'draft-' : ''}${points[0][2]}`,
+    name: opts.name?.trim() || null,
+    ...(opts.drafted ? { drafted: true } : {}),
     startedAt: points[0][2],
     endedAt: points[points.length - 1][2],
     distanceM: lineLength(coords),
@@ -98,6 +101,7 @@ export async function cacheRoute(id: string, route: NavRoute) {
 
 export function driveTitle(d: DriveSummary): string {
   if (d.name) return d.name;
+  if (d.drafted) return 'Drafted drive';
   const date = new Date(d.startedAt);
   const day = date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
   const hour = date.getHours();
@@ -106,6 +110,7 @@ export function driveTitle(d: DriveSummary): string {
 }
 
 export function driveSubtitle(d: DriveSummary): string {
+  if (d.drafted) return 'Drafted on the map';
   const date = new Date(d.startedAt);
   const year = date.getFullYear() !== new Date().getFullYear() ? `, ${date.getFullYear()}` : '';
   const day = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + year;
@@ -124,7 +129,7 @@ export async function syncDrivesToCarPlay() {
   for (const d of list) {
     const pts = (await getDrivePoints(d.id)).map((p) => [p[0], p[1]] as LngLat);
     const trace = thin(pts, 20).map((i) => pts[i]);
-    drives.push({ id: d.id, title: driveTitle(d), subtitle: `${driveSubtitle(d)}`, trace });
+    drives.push({ id: d.id, title: driveTitle(d), subtitle: d.drafted ? 'Drafted on the map' : driveSubtitle(d), trace });
   }
   await JoyrideNav.syncDrives(drives);
 }

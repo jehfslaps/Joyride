@@ -407,18 +407,34 @@ export function IconTile({ icon, size = 44, color, glow }: { icon: IconName; siz
 }
 
 /** A round glass button for back, settings and map controls. */
-export function RoundButton({ icon, onPress, label, tone }: { icon: IconName; onPress: () => void; label: string; tone?: 'hazard' }) {
+export function RoundButton({
+  icon,
+  onPress,
+  label,
+  tone,
+  disabled,
+}: {
+  icon: IconName;
+  onPress: () => void;
+  label: string;
+  tone?: 'hazard';
+  disabled?: boolean;
+}) {
   const p = useTheme();
   return (
     <PressableScale
       scaleTo={0.92}
+      disabled={disabled}
+      style={disabled ? { opacity: 0.35 } : undefined}
       onPress={() => {
+        if (disabled) return;
         tap();
         onPress();
       }}
       hitSlop={8}
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
     >
       <GlassCard radiusSize={22} style={styles.round}>
         <MaterialCommunityIcons name={icon} size={icon === 'chevron-left' ? 28 : 20} color={tone === 'hazard' ? p.hazard : p.mint} />
