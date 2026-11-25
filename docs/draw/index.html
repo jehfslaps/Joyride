@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Joyride Draw</title>
+<link href="https://unpkg.com/mapbox-gl@3.9.0/dist/mapbox-gl.css" rel="stylesheet">
+<style>
+  :root {
+    --canvas: #f3f8f4; --panel: rgba(255, 255, 255, 0.86); --line: rgba(11, 26, 18, 0.12);
+    --text: #0b1a12; --text2: #4d6656; --brand: #1e8a57; --onBrand: #ffffff; --route: #1e8a57; --glow: rgba(30, 138, 87, 0.35);
+    --caution: #c98a00; --hazard: #d9432f; --chip: rgba(11, 26, 18, 0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #070d0a; --panel: rgba(11, 26, 18, 0.86); --line: rgba(230, 247, 236, 0.12);
+      --text: #e6f7ec; --text2: #8fb39c; --brand: #7cff6b; --onBrand: #0b1a12; --route: #7cff6b; --glow: rgba(124, 255, 107, 0.35);
+      --caution: #ffc53d; --hazard: #ff6b5b; --chip: rgba(230, 247, 236, 0.08);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--canvas); color: var(--text); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  #map.drawing canvas { cursor: crosshair; }
+  .panel { position: absolute; background: var(--panel); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 10px 40px rgba(0,0,0,0.25); }
+  #side { top: 16px; left: 16px; width: 340px; max-height: calc(100% - 32px); overflow: auto; padding: 18px; display: grid; gap: 14px; }
+  h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+  h1 span { color: var(--brand); }
+  .muted { color: var(--text2); font-size: 13px; margin: 0; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--chip); border-radius: 14px; padding: 3px; }
+  .seg button { border: 0; background: transparent; color: var(--text); padding: 9px 8px; border-radius: 11px; font: inherit; font-weight: 600; cursor: pointer; transition: background .25s, color .25s; }
+  .seg button.on { background: var(--brand); color: var(--onBrand); }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button.pill { border: 1px solid var(--line); background: var(--chip); color: var(--text); padding: 10px 12px; border-radius: 999px; font: inherit; font-weight: 600; cursor: pointer;
+    transition: transform .12s, background .2s, opacity .2s; }
+  button.pill:hover:not(:disabled) { background: var(--glow); }
+  button.pill:active:not(:disabled) { transform: scale(0.97); }
+  button.pill:disabled { opacity: 0.4; cursor: default; }
+  button.primary { background: var(--brand); color: var(--onBrand); border-color: transparent; padding: 13px; font-size: 16px; }
+  button.primary:hover:not(:disabled) { background: var(--brand); filter: brightness(1.08); }
+  .stats { display: flex; align-items: baseline; gap: 8px; font-size: 20px; font-weight: 700; }
+  .stats small { font-size: 14px; color: var(--text2); font-weight: 600; }
+  .warn { color: var(--caution); font-size: 13px; margin: 0; }
+  input[type=text], input[type=password] { width: 100%; padding: 11px 13px; border-radius: 12px; border: 1px solid var(--line); background: var(--chip); color: var(--text); font: inherit; }
+  #results { display: grid; gap: 4px; }
+  #results button { text-align: left; border: 0; background: transparent; color: var(--text); padding: 7px 8px; border-radius: 10px; cursor: pointer; font: inherit; }
+  #results button:hover { background: var(--chip); }
+  #results small { color: var(--text2); display: block; }
+  #busy { display: none; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--brand); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #topright { top: 16px; right: 16px; display: flex; gap: 6px; padding: 6px; border-radius: 999px; }
+  #topright button { width: 42px; height: 42px; border-radius: 50%; border: 0; background: transparent; color: var(--text); font-size: 19px; cursor: pointer; }
+  #topright button:hover:not(:disabled) { background: var(--chip); }
+  #topright button:disabled { opacity: 0.35; cursor: default; }
+  kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; background: var(--chip); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+  .keys { font-size: 12px; color: var(--text2); display: grid; gap: 4px; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+  .overlay.show { display: flex; }
+  .dialog { background: var(--canvas); color: var(--text); border: 1px solid var(--line); border-radius: 24px; padding: 24px; width: min(440px, 100%); display: grid; gap: 14px; text-align: center; }
+  .dialog h2 { margin: 0; font-size: 21px; }
+  #qr svg { width: 100%; max-width: 300px; height: auto; background: #fff; border-radius: 14px; padding: 4px; }
+  ol { text-align: left; margin: 0; padding-left: 20px; color: var(--text2); font-size: 14px; display: grid; gap: 6px; }
+  a { color: var(--brand); }
+  @media (max-width: 720px) { #side { width: auto; right: 16px; max-height: 55%; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<section class="panel" id="side">
+  <div>
+    <h1>Joyride <span>Draw</span></h1>
+    <p class="muted">Draw a drive here, then send it to Joyride on your phone.</p>
+  </div>
+
+  <div>
+    <input type="text" id="search" placeholder="Jump to a city or address" autocomplete="off">
+    <div id="results"></div>
+  </div>
+
+  <div class="seg" role="tablist">
+    <button id="modeDraw" class="on" role="tab">Draw</button>
+    <button id="modeTap" role="tab">Click stops</button>
+  </div>
+  <p class="muted" id="hint"></p>
+
+  <div class="stats"><span id="miles">Nothing drawn</span><small id="mins">yet</small><span id="busy"></span></div>
+  <p class="warn" id="adjusted" hidden></p>
+
+  <div class="row">
+    <button class="pill" id="home" disabled>↩ Back to start</button>
+    <button class="pill" id="clear" disabled>Clear</button>
+  </div>
+  <button class="pill primary" id="send" disabled>Send to phone</button>
+
+  <div class="keys">
+    <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo · <kbd>Esc</kbd> cancel a stroke</div>
+    <div>Scroll to zoom · right-click and drag to move the map</div>
+  </div>
+  <p class="muted"><a href="#" id="forget">Change Mapbox key</a></p>
+</section>
+
+<div class="panel" id="topright">
+  <button id="undo" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>↶</button>
+  <button id="redo" title="Redo (Ctrl+Y)" aria-label="Redo" disabled>↷</button>
+  <button id="fit" title="Show the whole drive" aria-label="Show the whole drive" disabled>⤢</button>
+</div>
+
+<!-- One-time setup: this page's own Mapbox key, kept only in this browser. -->
+<div class="overlay" id="setup">
+  <div class="dialog">
+    <h2>One-time setup</h2>
+    <p class="muted">Paste your <b>Joyride Draw</b> Mapbox key (starts with <kbd>pk.</kbd>). It’s saved only in this browser on this computer.</p>
+    <input type="password" id="token" placeholder="pk.…" autocomplete="off">
+    <p class="warn" id="tokenError" hidden></p>
+    <button class="pill primary" id="saveToken">Start drawing</button>
+  </div>
+</div>
+
+<!-- Send to phone -->
+<div class="overlay" id="sendBox">
+  <div class="dialog">
+    <h2>Send to your phone</h2>
+    <input type="text" id="name" placeholder="Name this drive">
+    <div id="qr"></div>
+    <ol id="qrSteps">
+      <li>Open the <b>Camera</b> on your iPhone and point it at the code.</li>
+      <li>Tap the link that pops up, then <b>Open</b>.</li>
+      <li>In Joyride, tap <b>Save to my drives</b>.</li>
+    </ol>
+    <p class="muted" id="tooLong" hidden>This drive is too long for a code. Copy the link and text or email it to yourself, then tap it on your phone.</p>
+    <div class="row">
+      <button class="pill" id="copy">Copy link</button>
+      <button class="pill" id="closeSend">Done</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/mapbox-gl@3.9.0/dist/mapbox-gl.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="codec.js"></script>
+<script>
+(() => {
+  // ---------------------------------------------------------------- setup
+  const KEY = 'joyride.draw.key';
+  const SAVE = 'joyride.draw.drawing';
+  const OPEN_URL = 'https://jehfslaps.github.io/Joyride/open/#';
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+    del(k) { try { localStorage.removeItem(k); } catch (e) {} },
+  };
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  let token = store.get(KEY);
+  if (!token) $('setup').classList.add('show');
+  $('saveToken').onclick = async () => {
+    const t = $('token').value.trim();
+    $('tokenError').hidden = true;
+    if (!/^pk\./.test(t)) { $('tokenError').textContent = 'That doesn’t look like a public key (it should start with pk.).'; $('tokenError').hidden = false; return; }
+    const ok = await fetch(`https://api.mapbox.com/styles/v1/mapbox/streets-v12?access_token=${encodeURIComponent(t)}`).then((r) => r.ok).catch(() => false);
+    if (!ok) { $('tokenError').textContent = 'Mapbox didn’t accept that key here. Check it’s copied in full and allowed for this page’s address.'; $('tokenError').hidden = false; return; }
+    store.set(KEY, t);
+    location.reload();
+  };
+  $('forget').onclick = (e) => { e.preventDefault(); store.del(KEY); location.reload(); };
+  if (!token) return;
+
+  // ---------------------------------------------------------------- geometry
+  const R = 6371008.8;
+  const rad = (d) => (d * Math.PI) / 180;
+  function dist(a, b) {
+    const dLat = rad(b[1] - a[1]), dLng = rad(b[0] - a[0]);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a[1])) * Math.cos(rad(b[1])) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  const length = (line) => line.reduce((s, c, i) => (i ? s + dist(line[i - 1], c) : 0), 0);
+  function offsetFrom(p, line) {
+    let best = Infinity;
+    for (let i = 1; i < line.length; i++) best = Math.min(best, JoyrideCodec.offset(p, line[i - 1], line[i]));
+    return best;
+  }
+  /** Points at least `spacing` meters apart (always keeps the first and last). */
+  function thin(line, spacing) {
+    const out = [line[0]];
+    for (let i = 1; i < line.length - 1; i++) if (dist(out[out.length - 1], line[i]) >= spacing) out.push(line[i]);
+    if (line.length > 1) out.push(line[line.length - 1]);
+    return out;
+  }
+  const lngLat = (e) => [e.lngLat.lng, e.lngLat.lat];
+  const pair = (c) => `${c[0].toFixed(6)},${c[1].toFixed(6)}`;
+
+  // ---------------------------------------------------------------- Mapbox
+  async function getJson(url) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await fetch(url).catch(() => null);
+      if (r && r.ok) return r.json();
+      if (r && r.status !== 429 && r.status < 500) return null;
+      await new Promise((ok) => setTimeout(ok, 400 * 2 ** attempt));
+    }
+    return null;
+  }
+
+  /** Along real streets through these points (up to 25 at a time). */
+  async function directions(points) {
+    const coords = [];
+    let durationS = 0;
+    for (let i = 0; i < points.length - 1; i += 24) {
+      const chunk = points.slice(i, i + 25);
+      const q = new URLSearchParams({ geometries: 'geojson', overview: 'full', continue_straight: 'true', access_token: token });
+      const body = await getJson(`https://api.mapbox.com/directions/v5/mapbox/driving/${chunk.map(pair).join(';')}?${q}`);
+      const route = body && body.routes && body.routes[0];
+      if (!route) return null;
+      coords.push(...(coords.length ? route.geometry.coordinates.slice(1) : route.geometry.coordinates));
+      durationS += route.duration;
+    }
+    return coords.length >= 2 ? { coords, durationS } : null;
+  }
+
+  async function match(points) {
+    const q = new URLSearchParams({
+      geometries: 'geojson', overview: 'full', tidy: 'true', access_token: token,
+      radiuses: points.map(() => '35').join(';'), waypoints: `0;${points.length - 1}`,
+    });
+    const body = await getJson(`https://api.mapbox.com/matching/v5/mapbox/driving/${points.map(pair).join(';')}?${q}`);
+    if (!body || body.code !== 'Ok' || !body.matchings || !body.matchings.length) return null;
+    const coords = [];
+    let durationS = 0;
+    for (const m of body.matchings) {
+      coords.push(...(coords.length ? m.geometry.coordinates.slice(1) : m.geometry.coordinates));
+      durationS += m.duration || 0;
+    }
+    return coords.length >= 2 ? { coords, durationS } : null;
+  }
+
+  async function connect(from, to, kind) {
+    if (dist(from, to) < 5) return null;
+    const r = await directions([from, to]);
+    return r ? { coords: r.coords, durationS: r.durationS, kind, adjusted: false } : null;
+  }
+
+  /** A mouse stroke, snapped onto the streets it traces (same rules as the phone). */
+  async function snapStroke(raw, from) {
+    if (raw.length < 4 || length(raw) < 60) return [];
+    const pieces = [];
+    if (from && dist(from, raw[0]) > 40) {
+      const join = await connect(from, raw[0], 'draw');
+      if (join) pieces.push(join);
+    }
+    const start = pieces.length ? pieces[pieces.length - 1].coords.at(-1) : from;
+    const sample = thin(raw, 25);
+    const pts = start && dist(start, sample[0]) <= 40 ? [start, ...sample.slice(1)] : sample;
+    const coords = [];
+    let durationS = 0, failed = false;
+    for (let i = 0; i < pts.length - 1; i += 99) {
+      const m = await match(pts.slice(i, i + 100));
+      if (!m) { failed = true; break; }
+      coords.push(...(coords.length ? m.coords.slice(1) : m.coords));
+      durationS += m.durationS;
+    }
+    if (failed || coords.length < 2) {
+      const r = await directions(thin(pts, 180));
+      if (r) pieces.push({ coords: r.coords, durationS: r.durationS, kind: 'draw', adjusted: true });
+      return pieces;
+    }
+    const strays = coords.some((c, i) => i % 3 === 0 && offsetFrom(c, raw) > 60);
+    const longer = length(coords) > length(raw) * 1.6 + 200;
+    pieces.push({ coords, durationS, kind: 'draw', adjusted: strays || longer });
+    return pieces;
+  }
+
+  // ---------------------------------------------------------------- state
+  let steps = [];      // each step = the pieces one stroke or click added
+  let redo = [];
+  let pinnedStart = null;
+  let mode = 'draw';
+  let busy = 0;
+  let queue = Promise.resolve();
+
+  const pieces = () => steps.flat();
+  const startPoint = () => pinnedStart || (pieces()[0] ? pieces()[0].coords[0] : null);
+  const endPoint = () => { const p = pieces(); return p.length ? p[p.length - 1].coords.at(-1) : startPoint(); };
+
+  try {
+    const saved = JSON.parse(store.get(SAVE) || 'null');
+    if (saved) { steps = saved.steps || []; redo = saved.redo || []; pinnedStart = saved.pinnedStart || null; }
+  } catch (e) {}
+
+  function addStep(make) {
+    busy++;
+    render();
+    queue = queue.then(async () => {
+      try {
+        const step = ((await make(endPoint())) || []).filter((x) => x && x.coords.length >= 2);
+        if (step.length) { steps.push(step); redo = []; }
+      } catch (e) {
+        console.warn(e);
+      } finally {
+        busy--;
+        render();
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------- map
+  mapboxgl.accessToken = token;
+  const home = [-118.0328, 33.9792];
+  const first = startPoint();
+  const map = new mapboxgl.Map({
+    container: 'map',
+    style: dark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
+    center: first || home,
+    zoom: 14,
+    dragRotate: false,
+    pitchWithRotate: false,
+    touchPitch: false,
+    boxZoom: false,
+  });
+  map.touchZoomRotate.disableRotation();
+
+  const fc = (features) => ({ type: 'FeatureCollection', features });
+  const line = (coords, props = {}) => ({ type: 'Feature', properties: props, geometry: { type: 'LineString', coordinates: coords } });
+  const point = (c, props = {}) => ({ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: c } });
+
+  map.on('load', () => {
+    map.addSource('route', { type: 'geojson', data: fc([]) });
+    map.addSource('stroke', { type: 'geojson', data: fc([]) });
+    map.addSource('pins', { type: 'geojson', data: fc([]) });
+    const round = { 'line-cap': 'round', 'line-join': 'round' };
+    map.addLayer({ id: 'route-glow', type: 'line', source: 'route', layout: round, paint: { 'line-color': css('--route'), 'line-width': 16, 'line-blur': 10, 'line-opacity': 0.35 } });
+    map.addLayer({ id: 'route', type: 'line', source: 'route', layout: round,
+      paint: { 'line-color': ['case', ['get', 'adjusted'], css('--caution'), css('--route')], 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 3, 16, 7, 19, 11] } });
+    map.addLayer({ id: 'stroke', type: 'line', source: 'stroke', layout: round,
+      paint: { 'line-color': css('--text'), 'line-width': 3, 'line-dasharray': [1.5, 1.5], 'line-opacity': 0.9 } });
+    map.addLayer({ id: 'pins', type: 'circle', source: 'pins',
+      paint: { 'circle-radius': 8, 'circle-color': ['match', ['get', 'kind'], 'start', css('--brand'), css('--canvas')],
+        'circle-stroke-width': 3, 'circle-stroke-color': ['match', ['get', 'kind'], 'start', css('--canvas'), css('--brand')] } });
+    render();
+    if (pieces().length) fitAll(false);
+  });
+
+  function render() {
+    const all = pieces();
+    const s = startPoint(), e = endPoint();
+    if (map.getSource('route')) {
+      map.getSource('route').setData(fc(all.map((p) => line(p.coords, { adjusted: !!p.adjusted }))));
+      map.getSource('pins').setData(fc([...(s ? [point(s, { kind: 'start' })] : []), ...(all.length && e ? [point(e, { kind: 'end' })] : [])]));
+    }
+    const meters = all.reduce((a, p) => a + length(p.coords), 0);
+    const secs = all.reduce((a, p) => a + p.durationS, 0);
+    $('miles').textContent = all.length ? `${(meters / 1609.344).toFixed(1)} mi` : 'Nothing drawn';
+    $('mins').textContent = all.length ? `about ${Math.max(1, Math.round(secs / 60))} min` : 'yet';
+    const adj = all.filter((p) => p.adjusted).length;
+    $('adjusted').hidden = !adj;
+    $('adjusted').textContent = `${adj === 1 ? 'One part' : `${adj} parts`} adjusted to follow legal streets (in amber).`;
+    $('busy').style.display = busy ? 'inline-block' : 'none';
+    $('undo').disabled = !steps.length || busy > 0;
+    $('redo').disabled = !redo.length || busy > 0;
+    $('fit').disabled = !all.length;
+    $('home').disabled = !all.length || !s || !e || dist(s, e) < 30 || busy > 0;
+    $('clear').disabled = !steps.length && !pinnedStart;
+    $('send').disabled = !all.length || busy > 0;
+    $('hint').textContent = mode === 'draw'
+      ? `Click and drag along the streets; let go and it snaps onto them.${s ? '' : ' Your first stroke is the start, anywhere you like.'}`
+      : `Click a street to ${s ? 'drive there along real streets' : 'start there'}. Drag to move the map.`;
+    store.set(SAVE, JSON.stringify({ steps, redo, pinnedStart }));
+  }
+
+  function fitAll(animate = true) {
+    const all = pieces().flatMap((p) => p.coords);
+    if (!all.length) return;
+    const b = all.reduce((bb, c) => bb.extend(c), new mapboxgl.LngLatBounds(all[0], all[0]));
+    map.fitBounds(b, { padding: { top: 80, bottom: 60, left: innerWidth > 720 ? 390 : 40, right: 80 }, duration: animate ? 600 : 0 });
+  }
+
+  // ---------------------------------------------------------------- drawing
+  let stroke = null;
+  let panning = null;
+
+  function setMode(m) {
+    mode = m;
+    $('modeDraw').classList.toggle('on', m === 'draw');
+    $('modeTap').classList.toggle('on', m === 'tap');
+    $('map').classList.toggle('drawing', m === 'draw');
+    if (m === 'draw') map.dragPan.disable(); else map.dragPan.enable();
+    render();
+  }
+  $('modeDraw').onclick = () => setMode('draw');
+  $('modeTap').onclick = () => setMode('tap');
+
+  const canvas = map.getCanvasContainer();
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  map.on('mousedown', (e) => {
+    const b = e.originalEvent.button;
+    if (b === 2) { panning = { x: e.originalEvent.clientX, y: e.originalEvent.clientY }; return; }
+    if (b === 0 && mode === 'draw') {
+      stroke = { raw: [lngLat(e)], px: [e.point.x, e.point.y] };
+      e.preventDefault();
+    }
+  });
+  map.on('mousemove', (e) => {
+    if (panning) {
+      const x = e.originalEvent.clientX, y = e.originalEvent.clientY;
+      map.panBy([panning.x - x, panning.y - y], { duration: 0 });
+      panning = { x, y };
+      return;
+    }
+    if (!stroke) return;
+    const [x, y] = stroke.px;
+    if (Math.hypot(e.point.x - x, e.point.y - y) < 4) return;
+    stroke.px = [e.point.x, e.point.y];
+    stroke.raw.push(lngLat(e));
+    map.getSource('stroke') && map.getSource('stroke').setData(fc([line(stroke.raw)]));
+  });
+  const endStroke = () => {
+    panning = null;
+    if (!stroke) return;
+    const raw = stroke.raw;
+    stroke = null;
+    addStep(async (from) => {
+      try { return await snapStroke(raw, from); }
+      finally { map.getSource('stroke') && map.getSource('stroke').setData(fc([])); }
+    });
+  };
+  map.on('mouseup', endStroke);
+  window.addEventListener('mouseup', () => { panning = null; });
+  canvas.addEventListener('mouseleave', () => { if (stroke) endStroke(); panning = null; });
+
+  map.on('click', (e) => {
+    if (mode !== 'tap') return;
+    const c = lngLat(e);
+    if (!startPoint()) { pinnedStart = c; render(); return; }
+    addStep(async (from) => { const p = await connect(from, c, 'tap'); return p ? [p] : []; });
+  });
+
+  // ---------------------------------------------------------------- buttons and keys
+  function undo() { if (!steps.length || busy) return; redo.push(steps.pop()); render(); }
+  function redoStep() { if (!redo.length || busy) return; steps.push(redo.pop()); render(); }
+  $('undo').onclick = undo;
+  $('redo').onclick = redoStep;
+  $('fit').onclick = () => fitAll();
+  $('home').onclick = () => { const s = startPoint(); addStep(async (from) => { const p = await connect(from, s, 'home'); return p ? [p] : []; }); };
+  $('clear').onclick = () => { if (confirm('Clear the drawing? This can’t be undone.')) { steps = []; redo = []; pinnedStart = null; render(); } };
+  window.addEventListener('keydown', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT')) return;
+    const k = e.key.toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if ((e.ctrlKey || e.metaKey) && (k === 'y' || (k === 'z' && e.shiftKey))) { e.preventDefault(); redoStep(); }
+    else if (k === 'escape' && stroke) { stroke = null; map.getSource('stroke').setData(fc([])); }
+  });
+
+  // ---------------------------------------------------------------- search
+  let searchTimer = null;
+  $('search').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const q = $('search').value.trim();
+    if (q.length < 3) { $('results').innerHTML = ''; return; }
+    searchTimer = setTimeout(async () => {
+      const c = map.getCenter();
+      const params = new URLSearchParams({ q, limit: '5', proximity: `${c.lng},${c.lat}`, access_token: token });
+      const body = await getJson(`https://api.mapbox.com/search/geocode/v6/forward?${params}`);
+      const box = $('results');
+      box.innerHTML = '';
+      for (const f of (body && body.features) || []) {
+        const b = document.createElement('button');
+        b.innerHTML = '';
+        const name = document.createElement('div');
+        name.textContent = f.properties.name;
+        const detail = document.createElement('small');
+        detail.textContent = f.properties.place_formatted || '';
+        b.append(name, detail);
+        b.onclick = () => {
+          const bb = f.properties.bbox;
+          if (bb) map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 60, duration: 800 });
+          else map.flyTo({ center: f.geometry.coordinates, zoom: 15, duration: 800 });
+          box.innerHTML = '';
+          $('search').value = f.properties.name;
+        };
+        box.append(b);
+      }
+    }, 250);
+  });
+
+  // ---------------------------------------------------------------- send to phone
+  function linkFor(name, tol) {
+    const coords = [];
+    for (const p of pieces()) for (const c of p.coords) if (!coords.length || dist(coords.at(-1), c) > 0.5) coords.push(c);
+    const s = startPoint();
+    if (s && dist(s, coords[0]) > 1) coords.unshift(s);
+    const durationS = pieces().reduce((a, p) => a + p.durationS, 0);
+    return OPEN_URL + JoyrideCodec.encode({ name, durationS, coords }, tol);
+  }
+  let lastLink = '';
+  function showSend() {
+    const name = $('name').value.trim() || `Drawn drive · ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+    // As exact as fits in a QR code (simplify a little more for long drives).
+    let link = '', qrOk = false;
+    for (const tol of [3, 5, 8, 12, 18]) {
+      link = linkFor(name, tol);
+      if (link.length <= 2200) { qrOk = true; break; }
+    }
+    if (!qrOk) link = linkFor(name, 4);
+    lastLink = link;
+    $('qr').innerHTML = '';
+    $('qrSteps').hidden = !qrOk;
+    $('tooLong').hidden = qrOk;
+    if (qrOk) {
+      const qr = qrcode(0, 'L');
+      qr.addData(link, 'Byte');
+      qr.make();
+      $('qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
+    }
+    $('copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(link); $('copy').textContent = 'Copied'; setTimeout(() => ($('copy').textContent = 'Copy link'), 1600); }
+      catch (e) { prompt('Copy this link:', link); }
+    };
+  }
+  $('send').onclick = () => { $('sendBox').classList.add('show'); showSend(); $('name').focus(); };
+  $('name').addEventListener('input', showSend);
+  $('closeSend').onclick = () => $('sendBox').classList.remove('show');
+  $('sendBox').addEventListener('click', (e) => { if (e.target === $('sendBox')) $('sendBox').classList.remove('show'); });
+
+  setMode('draw');
+  // For the automated test (and curious minds): a peek at the drawing's state.
+  window.__joyrideDraw = { map, info: () => ({ steps: steps.length, redo: redo.length, busy, pieces: pieces() }), lastLink: () => lastLink };
+})();
+</script>
+</body>
+</html>

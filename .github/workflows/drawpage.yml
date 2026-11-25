@@ -1,0 +1,38 @@
+name: Draw page check
+
+# Opens the desktop Joyride Draw page (docs/draw) in a real browser with live
+# Mapbox, draws with the mouse, and checks the phone can read what it sends.
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Browser
+        run: |
+          npm i --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+      - name: Link format test
+        run: npx tsx tests/drivelink.test.ts
+      - name: Draw in the browser
+        env:
+          EXPO_PUBLIC_MAPBOX_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
+        run: |
+          python3 -m http.server 8080 --directory docs >/dev/null 2>&1 &
+          sleep 1
+          npx tsx scripts/drawpage.e2e.ts out
+      - name: Save screenshots to a draft release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls out/* >/dev/null 2>&1 || exit 0
+          gh release delete drawpage --yes --cleanup-tag 2>/dev/null || true
+          gh release create drawpage out/* --draft --target "$GITHUB_SHA" --title "Draw page check" --notes "Screenshots of the desktop Joyride Draw page. Draft: only the owner can see it."

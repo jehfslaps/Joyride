@@ -31,6 +31,7 @@ jobs:
           npx tsx tests/streettiles.test.ts
           npx tsx tests/parked.test.ts
           npx tsx tests/draft.test.ts
+          npx tsx tests/drivelink.test.ts
       - name: Build and check routes
         env:
           EXPO_PUBLIC_MAPBOX_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
